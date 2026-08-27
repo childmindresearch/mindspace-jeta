@@ -165,6 +165,22 @@ def main():
     logs_dir = config.paths.logs_dir
     os.makedirs(logs_dir, exist_ok=True)
 
+    # A. Build Side-by-Side Predictions vs. Actuals DataFrame
+    pred_vs_actual_dict = {config.dataset.text_column: test_texts}
+    for i, col_name in enumerate(config.dataset.pca_columns):
+        actual_vals = test_pca_matrix[:, i]
+        pred_vals = predicted_pca_matrix[:, i]
+        abs_errors = np.abs(actual_vals - pred_vals)
+        pred_vs_actual_dict[f"Actual_{col_name}"] = actual_vals
+        pred_vs_actual_dict[f"Predicted_{col_name}"] = pred_vals
+        pred_vs_actual_dict[f"Abs_Error_{col_name}"] = abs_errors
+
+    pred_vs_actual_dict["Metric_Space_Similarity"] = pos_sims
+    pred_vs_actual_df = pd.DataFrame(pred_vs_actual_dict)
+
+    pred_vs_actual_csv_path = os.path.join(logs_dir, "test_predictions_vs_actuals.csv")
+    pred_vs_actual_df.to_csv(pred_vs_actual_csv_path, index=False)
+
     test_report_json = {
         "test_dataset_path": test_csv_path,
         "n_test_samples": n_samples,
@@ -241,10 +257,21 @@ def main():
     print(f"    - Mean Matched Pair Sim:       {mean_pos_sim:+.4f}")
     print(f"    - Mean Unmatched Pair Sim:     {mean_neg_sim:+.4f}")
     print(f"    - Separation Margin:           {separation_margin:+.4f}")
+    print("-" * 70)
+    print(" 4. SAMPLE PREDICTIONS VS. ACTUALS (First 3 Test Entries):")
+    for idx in range(min(3, n_samples)):
+        print(f"    Entry [{idx+1}]: \"{test_texts[idx][:75]}...\"")
+        for c, col_name in enumerate(config.dataset.pca_columns):
+            act = test_pca_matrix[idx, c]
+            prd = predicted_pca_matrix[idx, c]
+            err = abs(act - prd)
+            print(f"       * {col_name:8s} | Actual: {act:+.3f} | Predicted: {prd:+.3f} | Abs Err: {err:.3f}")
+        print()
     print("=" * 70)
     print(f" SUCCESS: Test evaluation reports saved to:")
-    print(f"   - JSON: '{json_output_path}'")
-    print(f"   - CSV:  '{csv_output_path}'")
+    print(f"   - Predictions vs Actuals CSV: '{pred_vs_actual_csv_path}'")
+    print(f"   - Metrics Summary JSON:       '{json_output_path}'")
+    print(f"   - Metrics Summary CSV:        '{csv_output_path}'")
     print("=" * 70)
 
 
