@@ -11,14 +11,13 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict, Any
+from typing import Dict
 
 # Disable pyarrow_hotfix vulnerability patch conflict with modern pyarrow
 sys.modules['pyarrow_hotfix'] = type('pyarrow_hotfix', (), {'install': lambda *args, **kwargs: None})()
 
 import numpy as np
 import pandas as pd
-import torch
 
 from src.config import load_config, Config
 from src.inference import CLIPPCAPipeline
@@ -223,9 +222,9 @@ def main():
         {"Metric Category": "PCA Prediction", "Metric Name": "Overall R^2 Score", "Value": f"{r2_overall:.4f}"},
         {"Metric Category": "PCA Prediction", "Metric Name": "Overall MAE", "Value": f"{mae_overall:.4f}"},
         {"Metric Category": "PCA Prediction", "Metric Name": "Overall RMSE", "Value": f"{rmse_overall:.4f}"},
-        {"Metric Category": "Shared 16D Space", "Metric Name": "Mean Pos Pair Sim", "Value": f"{mean_pos_sim:.4f}"},
-        {"Metric Category": "Shared 16D Space", "Metric Name": "Mean Neg Pair Sim", "Value": f"{mean_neg_sim:.4f}"},
-        {"Metric Category": "Shared 16D Space", "Metric Name": "Separation Margin", "Value": f"{separation_margin:+.4f}"},
+        {"Metric Category": f"Shared {config.model_architecture.shared_dim}D Space", "Metric Name": "Mean Pos Pair Sim", "Value": f"{mean_pos_sim:.4f}"},
+        {"Metric Category": f"Shared {config.model_architecture.shared_dim}D Space", "Metric Name": "Mean Neg Pair Sim", "Value": f"{mean_neg_sim:.4f}"},
+        {"Metric Category": f"Shared {config.model_architecture.shared_dim}D Space", "Metric Name": "Separation Margin", "Value": f"{separation_margin:+.4f}"},
     ]
 
     csv_output_path = os.path.join(logs_dir, "test_evaluation_report.csv")
@@ -253,7 +252,7 @@ def main():
     for col_name, r2_val in r2_per_component.items():
         print(f"       * {col_name:12s} R^2 = {r2_val:+.4f} | MAE = {mae_per_component[col_name]:.4f}")
     print("-" * 70)
-    print(" 3. 16D SHARED METRIC SPACE ALIGNMENT:")
+    print(f" 3. {config.model_architecture.shared_dim}D SHARED METRIC SPACE ALIGNMENT:")
     print(f"    - Mean Matched Pair Sim:       {mean_pos_sim:+.4f}")
     print(f"    - Mean Unmatched Pair Sim:     {mean_neg_sim:+.4f}")
     print(f"    - Separation Margin:           {separation_margin:+.4f}")

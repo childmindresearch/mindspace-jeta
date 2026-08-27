@@ -2,7 +2,7 @@
 PyTorch Dataset module for handling paired text embeddings and PCA score matrices.
 """
 
-from typing import Union, Tuple, List
+from typing import Union, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset

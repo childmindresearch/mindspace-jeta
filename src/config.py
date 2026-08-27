@@ -1,22 +1,28 @@
 """
-Configuration loader and schema definition module.
-Handles reading YAML configuration files and validating parameters.
+Configuration dataclasses, YAML loader, exporter, and timestamp archiver.
+Manages all dataset paths, embedding model names, projection dimensions, hyperparameters, and directory output locations.
 """
 
 import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any, Optional
 import yaml
 
 
 @dataclass
 class DatasetConfig:
-    train_csv_path: str = "./data/train_data.csv"
-    inference_csv_path: str = "./data/eval_data.csv"
-    text_column: str = "journal_entry"
-    pca_columns: List[str] = field(default_factory=lambda: ["PCA_1", "PCA_2", "PCA_3", "PCA_4", "PCA_5"])
+    train_csv_path: str = "./data/mdes_train.csv"
+    inference_csv_path: str = "./data/mdes_test.csv"
+    text_column: str = "prompt_response"
+    pca_columns: List[str] = field(default_factory=lambda: [
+        "Detailed Task Focus",
+        "Intrusive Distraction",
+        "Episodic Social Cognition",
+        "Future Problem-Solving",
+        "Sensory Engagement"
+    ])
     sample_query_pca: List[float] = field(default_factory=lambda: [1.5, -1.0, 0.5, 0.0, 0.5])
 
     @property
@@ -28,7 +34,7 @@ class DatasetConfig:
 class TextEncoderConfig:
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     max_seq_length: int = 256
-    text_input_dim: Optional[int] = None  # Auto-detected if None
+    text_input_dim: Optional[int] = None
 
 
 @dataclass
@@ -38,22 +44,16 @@ class ModelArchConfig:
     text_head_dropout: float = 0.3
     pca_head_hidden_dims: List[int] = field(default_factory=lambda: [32])
     initial_temperature: float = 0.07
-    use_rff_expansion: bool = True
-    rff_dim: int = 128
-    use_swiglu_residual: bool = True
 
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 32
-    learning_rate: float = 1e-3
-    weight_decay: float = 1e-2
+    batch_size: int = 16
+    learning_rate: float = 0.0005
+    weight_decay: float = 0.05
     epochs: int = 25
     train_split: float = 0.8
     seed: int = 42
-    loss_type: str = "siglip"
-    auxiliary_loss_weight: float = 0.5
-    soft_target_sigma: float = 1.0
 
 
 @dataclass
@@ -136,9 +136,6 @@ class Config:
                 "text_head_dropout": self.model_architecture.text_head_dropout,
                 "pca_head_hidden_dims": self.model_architecture.pca_head_hidden_dims,
                 "initial_temperature": self.model_architecture.initial_temperature,
-                "use_rff_expansion": self.model_architecture.use_rff_expansion,
-                "rff_dim": self.model_architecture.rff_dim,
-                "use_swiglu_residual": self.model_architecture.use_swiglu_residual,
             },
             "training": {
                 "batch_size": self.training.batch_size,
@@ -147,9 +144,6 @@ class Config:
                 "epochs": self.training.epochs,
                 "train_split": self.training.train_split,
                 "seed": self.training.seed,
-                "loss_type": self.training.loss_type,
-                "auxiliary_loss_weight": self.training.auxiliary_loss_weight,
-                "soft_target_sigma": self.training.soft_target_sigma,
             },
             "paths": {
                 "output_dir": self.paths.output_dir,
@@ -175,10 +169,7 @@ def save_config(config: Config, output_path: str) -> None:
 
 
 def archive_existing_config(config_path: str = "config.yaml", archive_dir: str = "./config_archive") -> Optional[str]:
-    """Archives the existing configuration file into archive_dir with a timestamp identifier.
-
-    Returns the path to the archived file, or None if config_path does not exist.
-    """
+    """Archives the existing configuration file into archive_dir with a timestamp identifier."""
     if not os.path.exists(config_path):
         return None
 
@@ -202,4 +193,3 @@ def load_config(config_path: str = "config.yaml") -> Config:
         data = yaml.safe_load(f) or {}
 
     return Config.from_dict(data)
-

@@ -76,9 +76,6 @@ def objective(
         text_head_dropout=text_head_dropout,
         pca_head_hidden_dims=pca_head_hidden_dims,
         initial_temperature=initial_temperature,
-        use_rff_expansion=getattr(base_config.model_architecture, "use_rff_expansion", True),
-        rff_dim=getattr(base_config.model_architecture, "rff_dim", 128),
-        use_swiglu_residual=getattr(base_config.model_architecture, "use_swiglu_residual", True),
     )
 
     # Suppress verbose prints during trial execution

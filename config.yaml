@@ -15,30 +15,24 @@ dataset:
   - 0.0
   - 0.5
 text_encoder:
-  model_name: BAAI/bge-large-en-v1.5
-  max_seq_length: 176
-  text_input_dim: 1024
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+  max_seq_length: 256
+  text_input_dim: 384
 model_architecture:
-  shared_dim: 64
+  shared_dim: 16
   text_head_hidden_dims:
   - 128
-  text_head_dropout: 0.2
+  text_head_dropout: 0.3
   pca_head_hidden_dims:
   - 32
-  initial_temperature: 0.14583991723477055
-  use_rff_expansion: true
-  rff_dim: 128
-  use_swiglu_residual: true
+  initial_temperature: 0.07
 training:
   batch_size: 16
-  learning_rate: 0.007134118629780365
-  weight_decay: 0.01880555616728355
+  learning_rate: 0.0005
+  weight_decay: 0.05
   epochs: 25
   train_split: 0.8
   seed: 42
-  loss_type: siglip
-  auxiliary_loss_weight: 0.5
-  soft_target_sigma: 1.0
 paths:
   output_dir: ./outputs
   logs_dir: ./outputs/logs

@@ -6,10 +6,9 @@ and synthetic dataset generation for testing.
 import sys
 import os
 import random
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple
 import numpy as np
 import pandas as pd
-import torch
 
 # Disable pyarrow_hotfix vulnerability patch conflict with modern pyarrow
 sys.modules['pyarrow_hotfix'] = type('pyarrow_hotfix', (), {'install': lambda *args, **kwargs: None})()
