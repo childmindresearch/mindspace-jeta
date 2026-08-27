@@ -67,6 +67,9 @@ class CLIPPCAPipeline:
             text_head_dropout=config.model_architecture.text_head_dropout,
             pca_head_hidden_dims=config.model_architecture.pca_head_hidden_dims,
             initial_temperature=config.model_architecture.initial_temperature,
+            use_rff_expansion=getattr(config.model_architecture, "use_rff_expansion", True),
+            rff_dim=getattr(config.model_architecture, "rff_dim", 128),
+            use_swiglu_residual=getattr(config.model_architecture, "use_swiglu_residual", True),
         )
 
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -74,7 +77,7 @@ class CLIPPCAPipeline:
         return cls(model=model, text_encoder=text_encoder, config=config, device=device)
 
     def predict_shared_embedding(self, text_list: List[str]) -> np.ndarray:
-        """Converts raw text strings to 16D shared space vectors using the text encoder and trained text head."""
+        """Converts raw text strings to shared space vectors using the text encoder and trained text head."""
         if not text_list:
             return np.empty((0, self.config.model_architecture.shared_dim), dtype=np.float32)
 
@@ -89,7 +92,7 @@ class CLIPPCAPipeline:
         return shared_embeds.astype(np.float32)
 
     def pca_to_shared_embedding(self, pca_scores: Union[List[float], np.ndarray, List[List[float]]]) -> np.ndarray:
-        """Converts raw 5D (or D-dimensional) PCA vectors into 16D shared space vectors using the trained PCA head."""
+        """Converts raw 5D PCA vectors into shared space vectors using the trained PCA head."""
         pca_arr = np.array(pca_scores, dtype=np.float32)
 
         # Handle single vector input vs batch matrix
@@ -114,7 +117,7 @@ class CLIPPCAPipeline:
     ) -> List[Dict[str, Union[int, str, float]]]:
         """Given an arbitrary target 5D PCA profile vector, finds and ranks the top K journal entries
 
-        in the database with the highest cosine similarity in the 16D shared space.
+        in the database with the highest cosine similarity in the shared metric space.
 
         Args:
             query_pca_vector: Target 5D PCA profile (e.g., [1.5, -2.0, 0.5, 0.0, 1.0])
@@ -127,13 +130,13 @@ class CLIPPCAPipeline:
         if not text_database:
             return []
 
-        # Project 5D PCA query to 16D shared space (1, 16)
+        # Project 5D PCA query to shared space
         query_shared = self.pca_to_shared_embedding(query_pca_vector)
 
-        # Project text database entries to 16D shared space (N, 16)
+        # Project text database entries to shared space
         text_shared_db = self.predict_shared_embedding(text_database)
 
-        # Compute cosine similarity (since embeddings are L2 normalized, dot product = cosine similarity)
+        # Compute cosine similarity
         cosine_sims = np.dot(text_shared_db, query_shared.T).squeeze(axis=-1)  # (N,)
 
         # Rank top_k indices descending
@@ -160,9 +163,9 @@ class CLIPPCAPipeline:
         reference_texts: Optional[List[str]] = None,
         temperature: float = 10.0,
     ) -> np.ndarray:
-        """Maps 1...N raw free-text journal entries to predicted 5D (or D-dimensional) PCA component score space.
+        """Maps 1...N raw free-text journal entries to predicted 5D PCA component score space.
 
-        Uses kernel-weighted similarity interpolation in the 16D shared metric space over reference exemplars.
+        Combines direct linear auxiliary decoding from the text head with kernel-weighted similarity interpolation.
 
         Args:
             text_list: List of N raw text strings.
@@ -176,20 +179,22 @@ class CLIPPCAPipeline:
         if not text_list:
             return np.empty((0, self.config.dataset.pca_input_dim), dtype=np.float32)
 
-        # 1. Project input text entries to 16D shared space (N, 16)
-        text_shared = self.predict_shared_embedding(text_list)
+        # 1. Direct auxiliary prediction from text head
+        dense_embeds = self.text_encoder.encode(text_list, show_progress_bar=False)
+        with torch.no_grad():
+            tensor_in = torch.from_numpy(dense_embeds).float().to(self.device)
+            direct_pca_pred = self.model.predict_pca_from_text(tensor_in).cpu().numpy()
 
-        # 2. Project reference PCA scores to 16D shared space (M, 16)
+        # 2. Kernel-weighted similarity interpolation over reference exemplars
+        text_shared = self.predict_shared_embedding(text_list)
         ref_pca_shared = self.pca_to_shared_embedding(reference_pca_matrix)
 
-        # 3. Compute pairwise cosine similarity matrix (N, M)
         sim_matrix = np.dot(text_shared, ref_pca_shared.T)
-
-        # 4. Softmax temperature weighting over reference exemplars
         exp_sims = np.exp(temperature * (sim_matrix - np.max(sim_matrix, axis=1, keepdims=True)))
-        attn_weights = exp_sims / np.sum(exp_sims, axis=1, keepdims=True)  # (N, M)
+        attn_weights = exp_sims / np.sum(exp_sims, axis=1, keepdims=True)
 
-        # 5. Weighted combination of reference 5D PCA component scores
-        predicted_pca = np.dot(attn_weights, reference_pca_matrix)  # (N, 5)
+        kernel_pca_pred = np.dot(attn_weights, reference_pca_matrix)
 
-        return predicted_pca.astype(np.float32)
+        # Combine direct aux prediction with kernel interpolation
+        final_predicted_pca = 0.5 * direct_pca_pred + 0.5 * kernel_pca_pred
+        return final_predicted_pca.astype(np.float32)

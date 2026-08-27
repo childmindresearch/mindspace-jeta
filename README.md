@@ -12,7 +12,7 @@
 
 ## 📌 Architectural Overview
 
-The system maps both **high-dimensional text embeddings** (e.g., 384D from `all-MiniLM-L6-v2` or 1024D from `bge-large-en-v1.5`) and **low-dimensional PCA score vectors** (e.g., 5D survey scores: *Task, Intrusive, Emotion, etc.*) into a **shared 16-dimensional L2-normalized metric space** using symmetric InfoNCE / CLIP cross-entropy loss.
+The system maps both **high-dimensional text embeddings** (e.g., 1024D from `BAAI/bge-large-en-v1.5` or 384D from `all-MiniLM-L6-v2`) and **low-dimensional PCA score vectors** (e.g., 5D survey scores: *Detailed Task Focus, Intrusive Distraction, Episodic Social Cognition, Future Problem-Solving, Sensory Engagement*) into a **shared L2-normalized metric space** using **Google DeepMind SigLIP Pairwise Loss**, **Distance-Weighted Soft Targets**, **Random Fourier Feature (RFF) Expansion**, **SwiGLU LayerNorm Residual Projection Blocks**, **Multi-Task Auxiliary Direct PCA Decoding**, and **Cosine Annealing LR Scheduling**.
 
 ```
  ┌─────────────────────────┐               ┌─────────────────────────┐
@@ -20,26 +20,24 @@ The system maps both **high-dimensional text embeddings** (e.g., 384D from `all-
  │   (150-300 words)       │               │ [Task, Intrusive, ...]  │
  └────────────┬────────────┘               └────────────┬────────────┘
               │                                         │
-    SentenceTransformer                                 │
-  (all-MiniLM-L6-v2, 256)                              │
-              │ (384-D)                                 │ (5-D)
+    SentenceTransformer                       Fourier Feature Expansion
+ (BAAI/bge-large-en-v1.5, 176)                    (5D -> 128D RFF)
+              │ (1024D)                                 │ (128D)
               ▼                                         ▼
 ┌───────────────────────────┐             ┌───────────────────────────┐
-│    Text Projection Head   │             │   PCA Projection Head     │
-│   Linear(384 -> 128)      │             │     Linear(5 -> 32)       │
-│   BatchNorm1d(128)        │             │     BatchNorm1d(32)       │
-│   ReLU()                  │             │     ReLU()                │
-│   Dropout(p=0.3)          │             │     Linear(32 -> 16)      │
-│   Linear(128 -> 16)       │             └─────────────┬─────────────┘
-└─────────────┬─────────────┘                           │
+│   Text Projection Head    │             │   PCA Projection Head     │
+│ LayerNorm + SwiGLU Gated  │             │ LayerNorm + SwiGLU Gated  │
+│ Residual Projection Block │             │ Residual Projection Block │
+└─────────────┬─────────────┘             └─────────────┬─────────────┘
               │                                         │
               ▼                                         ▼
       L2-Normalization                          L2-Normalization
               │                                         │
               └──────────────────┬──────────────────────┘
                                  ▼
-                     16-D Shared Metric Space
-                  Symmetric InfoNCE / CLIP Loss
+                     64D Shared Metric Space
+             SigLIP Loss + Distance-Weighted Soft Targets
+             + Auxiliary Multi-Task Direct PCA Decoder
 ```
 
 ---
@@ -47,7 +45,8 @@ The system maps both **high-dimensional text embeddings** (e.g., 384D from `all-
 ## 🚀 Key Features
 
 - ⚙️ **Fully Config-Driven (`config.yaml`)**: Manage embedding models, text sequence lengths, PCA column headers, hidden layer dimensions, hyperparameters, and file output paths without modifying code.
-- 🧬 **Dynamic Projection Heads**: Automatically scales input text dimensions (384D/1024D) and PCA component counts (5D, 8D, 10D).
+- 🧬 **Modern Post-CLIP Architecture**: Integrates Google DeepMind SigLIP pairwise sigmoid loss, distance-weighted soft targets, Random Fourier Feature expansion, and SwiGLU residual projection blocks with LayerNorm.
+- 🎯 **Multi-Task Auxiliary Decoding**: Direct linear 5D PCA decoder on the text head trained jointly with smooth L1 regression loss for continuous score predictions.
 - 🔍 **Direct Text-to-PCA Prediction**: Maps $1...N$ free-text entries directly into predicted 5D PCA component score matrices (`outputs/predicted_pca_scores.csv`).
 - 🔄 **Cross-Modal Retrieval**: Query ranked journal entries matching arbitrary target 5D PCA psychological profiles.
 - 🎯 **Optuna Fine-Tuning & Archiving (`tune.py`)**: Automatic TPE hyperparameter optimization. Prior configurations are automatically archived to `config_archive/config_YYYYMMDD_HHMMSS.yaml` before updating `config.yaml` in-place.
@@ -68,8 +67,8 @@ CLIP/
 ├── evaluate.py              # Held-out test performance evaluation & metrics report
 ├── tune.py                  # Optuna hyperparameter optimization & fine-tuning orchestrator
 ├── data/                    # Dedicated data directory for input .csv files
-│   ├── train_data.csv       # Training CSV dataset
-│   └── eval_data.csv        # Evaluation CSV dataset
+│   ├── mdes_train.csv       # Training CSV dataset
+│   └── mdes_test.csv        # Evaluation CSV dataset
 ├── utils/                   # Standalone data analysis utilities
 │   ├── __init__.py
 │   └── analyze_token_length.py # Tokenizer scanner & 95% coverage recommendation tool
@@ -80,10 +79,10 @@ CLIP/
 └── src/                     # Core package library
     ├── __init__.py
     ├── config.py            # Dataclass loader, validator, exporter & timestamp archiver
-    ├── models.py            # PyTorch ContrastiveProjectionModel (Text Head, PCA Head, Temperature)
+    ├── models.py            # RFF expansion, SwiGLU residual blocks, ContrastiveProjectionModel
     ├── dataset.py           # PyTorch Dataset for paired mini-batch loading
     ├── utils.py             # SentenceTransformer wrapper, CSV parser, synthetic generator
-    ├── trainer.py           # Symmetric InfoNCE Loss, AdamW optimizer, metrics tracking & plotting
+    ├── trainer.py           # SigLIP Loss with soft targets, CosineAnnealingLR, multi-task training
     └── inference.py         # Shared embedding projection & 5D PCA mapping engine
 ```
 
@@ -108,15 +107,15 @@ Manage all settings through `config.yaml`:
 
 ```yaml
 dataset:
-  train_csv_path: "./data/train_data.csv"
-  inference_csv_path: "./data/eval_data.csv"
-  text_column: "journal_entry"
+  train_csv_path: "./data/mdes_train.csv"
+  inference_csv_path: "./data/mdes_test.csv"
+  text_column: "prompt_response"
   pca_columns:
-    - "PCA_1"
-    - "PCA_2"
-    - "PCA_3"
-    - "PCA_4"
-    - "PCA_5"
+    - "Detailed Task Focus"
+    - "Intrusive Distraction"
+    - "Episodic Social Cognition"
+    - "Future Problem-Solving"
+    - "Sensory Engagement"
   sample_query_pca:
     - 1.5
     - -1.0
@@ -125,26 +124,32 @@ dataset:
     - 0.5
 
 text_encoder:
-  model_name: "sentence-transformers/all-MiniLM-L6-v2"
-  max_seq_length: 256
-  text_input_dim: null  # Auto-detected
+  model_name: "BAAI/bge-large-en-v1.5"
+  max_seq_length: 176
+  text_input_dim: 1024
 
 model_architecture:
-  shared_dim: 16
+  shared_dim: 64
   text_head_hidden_dims:
     - 128
-  text_head_dropout: 0.3
+  text_head_dropout: 0.2
   pca_head_hidden_dims:
     - 32
-  initial_temperature: 0.07
+  initial_temperature: 0.1458
+  use_rff_expansion: true
+  rff_dim: 128
+  use_swiglu_residual: true
 
 training:
-  batch_size: 32
-  learning_rate: 0.001
-  weight_decay: 0.01
+  batch_size: 16
+  learning_rate: 0.00713
+  weight_decay: 0.0188
   epochs: 25
   train_split: 0.8
   seed: 42
+  loss_type: "siglip"
+  auxiliary_loss_weight: 0.5
+  soft_target_sigma: 1.0
 
 optuna:
   n_trials: 25

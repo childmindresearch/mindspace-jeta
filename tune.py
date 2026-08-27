@@ -3,7 +3,7 @@
 Hyperparameter Optimization & Fine-Tuning Orchestrator using Optuna.
 Searches for optimal learning rates, weight decays, projection head dimensions,
 shared metric space dimensions, dropout, and temperature values.
-Saves the optimal configuration to config_best.yaml.
+Saves the optimal configuration to config.yaml (archiving prior config to config_archive/).
 """
 
 import argparse
@@ -76,6 +76,9 @@ def objective(
         text_head_dropout=text_head_dropout,
         pca_head_hidden_dims=pca_head_hidden_dims,
         initial_temperature=initial_temperature,
+        use_rff_expansion=getattr(base_config.model_architecture, "use_rff_expansion", True),
+        rff_dim=getattr(base_config.model_architecture, "rff_dim", 128),
+        use_swiglu_residual=getattr(base_config.model_architecture, "use_swiglu_residual", True),
     )
 
     # Suppress verbose prints during trial execution

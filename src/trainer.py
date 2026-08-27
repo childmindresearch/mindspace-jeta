@@ -33,37 +33,47 @@ def compute_topk_accuracy(logits: torch.Tensor, k: int = 1) -> float:
     return float(correct / batch_size)
 
 
-class SymmetricCLIPLoss(nn.Module):
-    """Symmetric CLIP / InfoNCE Cross-Entropy Loss over cosine similarity matrices."""
+class SigLIPLoss(nn.Module):
+    """Google DeepMind SigLIP Pairwise Sigmoid Binary Cross-Entropy Loss with Distance-Weighted Soft Targets."""
 
-    def __init__(self):
+    def __init__(self, soft_target_sigma: float = 1.0):
         super().__init__()
-        self.cross_entropy = nn.CrossEntropyLoss()
+        self.soft_target_sigma = soft_target_sigma
 
     def forward(
-        self, text_shared: torch.Tensor, pca_shared: torch.Tensor, logit_scale: torch.Tensor
+        self,
+        text_shared: torch.Tensor,
+        pca_shared: torch.Tensor,
+        logit_scale: torch.Tensor,
+        logit_bias: torch.Tensor,
+        pca_scores: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
-        """Computes symmetric InfoNCE loss and top-K accuracy metrics across mini-batch."""
+        """Computes pairwise SigLIP loss with continuous soft targets."""
         device = text_shared.device
         batch_size = text_shared.size(0)
 
-        # Pairwise cosine similarities scaled by logit scale
-        logits_per_text = logit_scale * (text_shared @ pca_shared.T)  # (B, B)
-        logits_per_pca = logits_per_text.T                             # (B, B)
+        # Pairwise cosine similarity matrix
+        sim_matrix = text_shared @ pca_shared.T  # (B, B)
+        logits = logit_scale * sim_matrix + logit_bias  # (B, B)
 
-        # Ground truth diagonal targets
-        labels = torch.arange(batch_size, device=device, dtype=torch.long)
+        # Distance-weighted soft targets if pca_scores provided
+        if pca_scores is not None:
+            diff = pca_scores.unsqueeze(1) - pca_scores.unsqueeze(0)  # (B, B, D)
+            dist_sq = torch.sum(diff ** 2, dim=-1)  # (B, B)
+            soft_targets = torch.exp(-dist_sq / (2.0 * (self.soft_target_sigma ** 2)))  # (B, B)
+            labels = 2.0 * soft_targets - 1.0
+        else:
+            labels = 2.0 * torch.eye(batch_size, device=device) - 1.0
 
-        loss_text = self.cross_entropy(logits_per_text, labels)
-        loss_pca = self.cross_entropy(logits_per_pca, labels)
+        # SigLIP pairwise loss
+        loss = -F.logsigmoid(labels * logits).mean()
 
-        total_loss = (loss_text + loss_pca) / 2.0
-
-        # Compute accuracy metrics
+        # Compute accuracy metrics over cosine similarity matrix
+        logits_per_text = sim_matrix * logit_scale
         top1_text = compute_topk_accuracy(logits_per_text, k=1)
         top5_text = compute_topk_accuracy(logits_per_text, k=min(5, batch_size))
-        top1_pca = compute_topk_accuracy(logits_per_pca, k=1)
-        top5_pca = compute_topk_accuracy(logits_per_pca, k=min(5, batch_size))
+        top1_pca = compute_topk_accuracy(logits_per_text.T, k=1)
+        top5_pca = compute_topk_accuracy(logits_per_text.T, k=min(5, batch_size))
 
         metrics = {
             "top1_acc_text": top1_text,
@@ -72,11 +82,11 @@ class SymmetricCLIPLoss(nn.Module):
             "top5_acc_pca": top5_pca,
         }
 
-        return total_loss, loss_text, loss_pca, metrics
+        return loss, loss, loss, metrics
 
 
 class Trainer:
-    """Trainer pipeline managing data loaders, AdamW optimization, training loop, detailed epoch logging, and diagnostic plotting."""
+    """Trainer pipeline managing data loaders, AdamW optimization, CosineAnnealingLR, multi-task training loop, and diagnostic plotting."""
 
     def __init__(self, model: ContrastiveProjectionModel, config: Config):
         self.model = model
@@ -85,16 +95,24 @@ class Trainer:
         self.model.to(self.device)
 
         # Loss function
-        self.criterion = SymmetricCLIPLoss()
+        if getattr(self.config.training, "loss_type", "siglip") == "siglip":
+            self.criterion = SigLIPLoss(soft_target_sigma=getattr(self.config.training, "soft_target_sigma", 1.0))
+        else:
+            self.criterion = SymmetricCLIPLoss()
 
-        # Optimizer: AdamW with lr=1e-3, weight_decay=1e-2
+        # Optimizer: AdamW
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.training.learning_rate,
             weight_decay=self.config.training.weight_decay,
         )
 
-        print(f"[Trainer] Initialized on device: '{self.device}'. Optimizer: AdamW(lr={self.config.training.learning_rate}, weight_decay={self.config.training.weight_decay})")
+        # Cosine Annealing Learning Rate Scheduler
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.config.training.epochs, eta_min=1e-6
+        )
+
+        print(f"[Trainer] Initialized on device: '{self.device}'. Optimizer: AdamW(lr={self.config.training.learning_rate}, weight_decay={self.config.training.weight_decay}), Scheduler: CosineAnnealingLR")
 
     def train(self, dataset: JournalPCADataset) -> Dict[str, List[Any]]:
         """Executes 80/20 train/val split, runs training epochs, records metrics CSV & plots diagnostic loss curves."""
@@ -144,6 +162,8 @@ class Trainer:
         val_neg_sims: List[float] = []
 
         epochs = self.config.training.epochs
+        aux_weight = getattr(self.config.training, "auxiliary_loss_weight", 0.5)
+
         for epoch in range(1, epochs + 1):
             # Training phase
             self.model.train()
@@ -154,15 +174,24 @@ class Trainer:
                 pca_batch = pca_batch.to(self.device)
 
                 self.optimizer.zero_grad()
-                text_shared, pca_shared, logit_scale = self.model(text_batch, pca_batch)
+                text_shared, pca_shared, logit_scale, logit_bias, aux_pca_pred = self.model(text_batch, pca_batch)
 
-                loss, loss_t, loss_p, _ = self.criterion(text_shared, pca_shared, logit_scale)
-                loss.backward()
+                if isinstance(self.criterion, SigLIPLoss):
+                    contrastive_loss, loss_t, loss_p, _ = self.criterion(text_shared, pca_shared, logit_scale, logit_bias, pca_batch)
+                else:
+                    contrastive_loss, loss_t, loss_p, _ = self.criterion(text_shared, pca_shared, logit_scale)
+
+                aux_loss = F.smooth_l1_loss(aux_pca_pred, pca_batch)
+                total_loss = contrastive_loss + (aux_weight * aux_loss)
+
+                total_loss.backward()
                 self.optimizer.step()
 
-                train_losses.append(loss.item())
+                train_losses.append(total_loss.item())
                 train_text_losses.append(loss_t.item())
                 train_pca_losses.append(loss_p.item())
+
+            self.scheduler.step()
 
             avg_train_loss = float(np.mean(train_losses)) if train_losses else 0.0
             avg_train_text = float(np.mean(train_text_losses)) if train_text_losses else 0.0
@@ -178,8 +207,12 @@ class Trainer:
                     text_batch = text_batch.to(self.device)
                     pca_batch = pca_batch.to(self.device)
 
-                    text_shared, pca_shared, logit_scale = self.model(text_batch, pca_batch)
-                    val_loss, loss_t, loss_p, acc_metrics = self.criterion(text_shared, pca_shared, logit_scale)
+                    text_shared, pca_shared, logit_scale, logit_bias, aux_pca_pred = self.model(text_batch, pca_batch)
+
+                    if isinstance(self.criterion, SigLIPLoss):
+                        val_loss, loss_t, loss_p, acc_metrics = self.criterion(text_shared, pca_shared, logit_scale, logit_bias, pca_batch)
+                    else:
+                        val_loss, loss_t, loss_p, acc_metrics = self.criterion(text_shared, pca_shared, logit_scale)
 
                     val_losses.append(val_loss.item())
                     val_text_losses.append(loss_t.item())
@@ -297,7 +330,7 @@ class Trainer:
         ax1.plot(epochs, history["val_loss"], label="Val Loss", color="#ff7f0e", linewidth=2, linestyle="--")
         ax1.plot(epochs, history["overfitting_gap"], label="Overfitting Gap (Val - Train)", color="#d62728", linewidth=1.5, linestyle=":")
         ax1.axhline(0, color="gray", linestyle="--", alpha=0.5)
-        ax1.set_title("InfoNCE Loss & Overfitting Gap", fontweight="bold")
+        ax1.set_title("Training Loss & Overfitting Gap", fontweight="bold")
         ax1.set_xlabel("Epoch")
         ax1.set_ylabel("Loss")
         ax1.legend()
@@ -329,7 +362,7 @@ class Trainer:
         if val_pos_sims and val_neg_sims:
             ax4.hist(val_pos_sims, bins=25, alpha=0.7, label="Positive Pairs (Matched)", color="#2ca02c", density=True)
             ax4.hist(val_neg_sims, bins=25, alpha=0.5, label="Negative Pairs (Unmatched)", color="#d62728", density=True)
-            ax4.set_title("Shared 16D Space Cosine Sim Distribution", fontweight="bold")
+            ax4.set_title(f"Shared {self.config.model_architecture.shared_dim}D Space Cosine Sim Distribution", fontweight="bold")
             ax4.set_xlabel("Cosine Similarity")
             ax4.set_ylabel("Density")
             ax4.legend()

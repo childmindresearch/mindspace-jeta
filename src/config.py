@@ -38,6 +38,9 @@ class ModelArchConfig:
     text_head_dropout: float = 0.3
     pca_head_hidden_dims: List[int] = field(default_factory=lambda: [32])
     initial_temperature: float = 0.07
+    use_rff_expansion: bool = True
+    rff_dim: int = 128
+    use_swiglu_residual: bool = True
 
 
 @dataclass
@@ -48,6 +51,9 @@ class TrainingConfig:
     epochs: int = 25
     train_split: float = 0.8
     seed: int = 42
+    loss_type: str = "siglip"
+    auxiliary_loss_weight: float = 0.5
+    soft_target_sigma: float = 1.0
 
 
 @dataclass
@@ -130,6 +136,9 @@ class Config:
                 "text_head_dropout": self.model_architecture.text_head_dropout,
                 "pca_head_hidden_dims": self.model_architecture.pca_head_hidden_dims,
                 "initial_temperature": self.model_architecture.initial_temperature,
+                "use_rff_expansion": self.model_architecture.use_rff_expansion,
+                "rff_dim": self.model_architecture.rff_dim,
+                "use_swiglu_residual": self.model_architecture.use_swiglu_residual,
             },
             "training": {
                 "batch_size": self.training.batch_size,
@@ -138,6 +147,9 @@ class Config:
                 "epochs": self.training.epochs,
                 "train_split": self.training.train_split,
                 "seed": self.training.seed,
+                "loss_type": self.training.loss_type,
+                "auxiliary_loss_weight": self.training.auxiliary_loss_weight,
+                "soft_target_sigma": self.training.soft_target_sigma,
             },
             "paths": {
                 "output_dir": self.paths.output_dir,

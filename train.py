@@ -92,6 +92,9 @@ def main():
         text_head_dropout=config.model_architecture.text_head_dropout,
         pca_head_hidden_dims=config.model_architecture.pca_head_hidden_dims,
         initial_temperature=config.model_architecture.initial_temperature,
+        use_rff_expansion=getattr(config.model_architecture, "use_rff_expansion", True),
+        rff_dim=getattr(config.model_architecture, "rff_dim", 128),
+        use_swiglu_residual=getattr(config.model_architecture, "use_swiglu_residual", True),
     )
 
     print(f"[5/5] Starting AdamW training for {config.training.epochs} epochs...")

@@ -1,13 +1,13 @@
 dataset:
-  train_csv_path: ./data/train_data.csv
-  inference_csv_path: ./data/eval_data.csv
-  text_column: journal_entry
+  train_csv_path: ./data/mdes_train.csv
+  inference_csv_path: ./data/mdes_test.csv
+  text_column: prompt_response
   pca_columns:
-  - PCA_1
-  - PCA_2
-  - PCA_3
-  - PCA_4
-  - PCA_5
+  - Detailed Task Focus
+  - Intrusive Distraction
+  - Episodic Social Cognition
+  - Future Problem-Solving
+  - Sensory Engagement
   sample_query_pca:
   - 1.5
   - -1.0
@@ -15,26 +15,30 @@ dataset:
   - 0.0
   - 0.5
 text_encoder:
-  model_name: sentence-transformers/all-MiniLM-L6-v2
-  max_seq_length: 256
-  text_input_dim: 384
+  model_name: BAAI/bge-large-en-v1.5
+  max_seq_length: 176
+  text_input_dim: 1024
 model_architecture:
-  shared_dim: 16
+  shared_dim: 64
   text_head_hidden_dims:
   - 128
-  - 64
-  text_head_dropout: 0.4
+  text_head_dropout: 0.2
   pca_head_hidden_dims:
   - 32
-  - 16
-  initial_temperature: 0.12106896936002161
+  initial_temperature: 0.14583991723477055
+  use_rff_expansion: true
+  rff_dim: 128
+  use_swiglu_residual: true
 training:
   batch_size: 16
-  learning_rate: 0.0005611516415334506
-  weight_decay: 0.07114476009343425
+  learning_rate: 0.007134118629780365
+  weight_decay: 0.01880555616728355
   epochs: 25
   train_split: 0.8
   seed: 42
+  loss_type: siglip
+  auxiliary_loss_weight: 0.5
+  soft_target_sigma: 1.0
 paths:
   output_dir: ./outputs
   logs_dir: ./outputs/logs
