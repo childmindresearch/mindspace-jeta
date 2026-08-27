@@ -114,7 +114,8 @@ class Trainer:
         train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
         batch_size = min(self.config.training.batch_size, train_size)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=(train_size > batch_size))
+        drop_last_flag = (train_size % batch_size == 1) and (train_size > batch_size)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=drop_last_flag)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         print(f"[Trainer] Dataset split: Train={train_size} samples, Val={val_size} samples (Batch Size={batch_size})")

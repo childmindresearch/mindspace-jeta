@@ -21,25 +21,16 @@ from src.inference import CLIPPCAPipeline
 from src.utils import load_csv_dataset, generate_synthetic_csv
 
 
-def resolve_config_path(config_arg: str) -> str:
-    """If user did not specify a custom config file, automatically use config_best.yaml if it exists."""
-    if config_arg != "config.yaml":
-        return config_arg
-
-    if os.path.exists("config_best.yaml"):
-        print("[Config Resolution] Detected Optuna-tuned 'config_best.yaml'. Automatically using optimal configuration.")
-        return "config_best.yaml"
-    return "config.yaml"
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run Direct Inference & Cross-Modal Retrieval")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to YAML configuration file")
     parser.add_argument("--eval_csv", type=str, default=None, help="Override path to separate evaluation CSV dataset")
     parser.add_argument("--top_k", type=int, default=5, help="Number of top retrieved entries to return")
+    parser.add_argument("--query_pca", type=str, default=None, help="Comma-separated float values for target PCA profile query vector")
+    parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if evaluation file is missing")
     args = parser.parse_args()
 
-    config_path = resolve_config_path(args.config)
+    config_path = args.config
 
     print("=" * 70)
     print("      Contrastive Projection Direct Inference & Retrieval")
@@ -58,17 +49,22 @@ def main():
 
     # Check or generate separate evaluation CSV dataset
     if not os.path.exists(eval_csv_path):
-        print(f"[Warning] Inference dataset CSV '{eval_csv_path}' not found. Generating synthetic evaluation dataset (N=100)...")
-        generate_synthetic_csv(
-            output_csv_path=eval_csv_path,
-            num_samples=100,
-            text_column=config.dataset.text_column,
-            pca_columns=config.dataset.pca_columns,
-            seed=123,
-        )
+        if args.generate_synthetic:
+            print(f"[Synthetic Data] Inference CSV '{eval_csv_path}' not found. Generating synthetic evaluation dataset (N=100)...")
+            generate_synthetic_csv(
+                output_csv_path=eval_csv_path,
+                text_column=config.dataset.text_column,
+                pca_columns=config.dataset.pca_columns,
+                num_samples=100,
+                seed=123,
+            )
+        else:
+            print(f"[Dataset Error] Evaluation dataset file not found at '{eval_csv_path}'.")
+            print("Please check 'dataset.inference_csv_path' in 'config.yaml' or pass '--generate_synthetic' to create a test dataset.")
+            sys.exit(1)
 
     # 2. Load Evaluation Dataset
-    print(f"[1/4] Loading evaluation CSV dataset from '{eval_csv_path}'...")
+    print(f"[1/5] Loading evaluation CSV dataset from '{eval_csv_path}'...")
     eval_texts, eval_pca_matrix = load_csv_dataset(
         csv_path=eval_csv_path,
         text_column=config.dataset.text_column,
@@ -77,11 +73,12 @@ def main():
     print(f"      Loaded {len(eval_texts)} evaluation entries.")
 
     # 3. Load Trained Pipeline Engine
-    print(f"[2/4] Loading trained model pipeline from '{checkpoint_path}'...")
+    print(f"[2/5] Loading trained model pipeline from '{checkpoint_path}'...")
     pipeline = CLIPPCAPipeline.load_from_checkpoint(checkpoint_path=checkpoint_path, config=config)
 
-    # 4. Direct Projection to 16D Shared Space
-    print("[3/4] Projecting evaluation texts and PCA component matrices to 16D shared space...")
+    # 4. Direct Projection to Shared Space
+    shared_dim = config.model_architecture.shared_dim
+    print(f"[3/5] Projecting evaluation texts and PCA component matrices to {shared_dim}D shared space...")
     text_shared_embeds = pipeline.predict_shared_embedding(eval_texts)
     pca_shared_embeds = pipeline.pca_to_shared_embedding(eval_pca_matrix)
 
@@ -89,7 +86,7 @@ def main():
     print(f"      Projected PCA Embeddings Shape:  {pca_shared_embeds.shape}")
 
     # Save output projected embeddings
-    os.makedirs(os.path.dirname(config.paths.embeddings_output), exist_ok=True)
+    os.makedirs(os.path.dirname(config.paths.embeddings_output) or ".", exist_ok=True)
     torch.save(
         {
             "text_shared_embeddings": text_shared_embeds,
@@ -101,8 +98,9 @@ def main():
     )
     print(f"      Saved projected shared embeddings to '{config.paths.embeddings_output}'")
 
-    # 5. Predict 5D PCA Components for 1...N Text Entry Records
-    print("\n[4/5] Mapping 1...N text entries to predicted 5D PCA Component Space...")
+    # 5. Predict PCA Components for 1...N Text Entry Records
+    pca_input_dim = config.dataset.pca_input_dim
+    print(f"\n[4/5] Mapping 1...N text entries to predicted {pca_input_dim}D PCA Component Space...")
     predicted_pca_matrix = pipeline.predict_pca_components(
         text_list=eval_texts,
         reference_pca_matrix=eval_pca_matrix,
@@ -129,10 +127,18 @@ def main():
 
     # 6. Cross-Modal Retrieval Query Example
     print(f"[5/5] Running Sample Cross-Modal Retrieval Query (Top {args.top_k})...")
-    num_pca_dims = config.dataset.pca_input_dim
-    sample_query_pca = [1.5 if i == 0 else (-1.0 if i == 1 else 0.5) for i in range(num_pca_dims)]
+    if args.query_pca:
+        sample_query_pca = [float(x.strip()) for x in args.query_pca.split(",")]
+    else:
+        sample_query_pca = config.dataset.sample_query_pca
 
-    print(f"      Target PCA Profile Vector ({num_pca_dims}D): {sample_query_pca}")
+    if not sample_query_pca or len(sample_query_pca) != pca_input_dim:
+        raise ValueError(
+            f"[Inference Error] Query PCA vector dimension ({len(sample_query_pca) if sample_query_pca else 0}) "
+            f"does not match configured PCA dimension ({pca_input_dim}D). Define 'dataset.sample_query_pca' in config.yaml or pass '--query_pca'."
+        )
+
+    print(f"      Target PCA Profile Vector ({pca_input_dim}D): {sample_query_pca}")
 
     results = pipeline.cross_modal_retrieval(
         query_pca_vector=sample_query_pca,

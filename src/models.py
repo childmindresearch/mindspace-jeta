@@ -12,21 +12,18 @@ import torch.nn.functional as F
 
 
 class TextProjectionHead(nn.Module):
-    """Dynamic neural network projecting text embeddings (e.g., 384D or 1024D) to shared space (16D).
-
-    Default architecture: Linear(384 -> 128) -> BatchNorm1d(128) -> ReLU() -> Dropout(p=0.3) -> Linear(128 -> 16)
-    """
+    """Dynamic neural network projecting text embeddings to shared space."""
 
     def __init__(
         self,
-        input_dim: int = 384,
-        hidden_dims: Optional[List[int]] = None,
+        input_dim: int,
+        hidden_dims: List[int],
         output_dim: int = 16,
         dropout_p: float = 0.3,
     ):
         super().__init__()
-        if hidden_dims is None:
-            hidden_dims = [128]
+        if not hidden_dims:
+            raise ValueError("[Model Error] 'text_head_hidden_dims' must be explicitly provided as a non-empty list of layer sizes.")
 
         layers: List[nn.Module] = []
         curr_dim = input_dim
@@ -48,20 +45,17 @@ class TextProjectionHead(nn.Module):
 
 
 class PCAProjectionHead(nn.Module):
-    """Dynamic neural network projecting PCA score vectors (e.g., 5D) to shared space (16D).
-
-    Default architecture: Linear(5 -> 32) -> BatchNorm1d(32) -> ReLU() -> Linear(32 -> 16)
-    """
+    """Dynamic neural network projecting PCA score vectors to shared space."""
 
     def __init__(
         self,
-        input_dim: int = 5,
-        hidden_dims: Optional[List[int]] = None,
+        input_dim: int,
+        hidden_dims: List[int],
         output_dim: int = 16,
     ):
         super().__init__()
-        if hidden_dims is None:
-            hidden_dims = [32]
+        if not hidden_dims:
+            raise ValueError("[Model Error] 'pca_head_hidden_dims' must be explicitly provided as a non-empty list of layer sizes.")
 
         layers: List[nn.Module] = []
         curr_dim = input_dim
@@ -83,17 +77,17 @@ class PCAProjectionHead(nn.Module):
 class ContrastiveProjectionModel(nn.Module):
     """CLIP-style Contrastive Projection Model aligning free-text embeddings with PCA score vectors.
 
-    Projects both modalities into a shared L2-normalized metric space (default 16D) with a learnable logit temperature scale.
+    Projects both modalities into a shared L2-normalized metric space with a learnable logit temperature scale.
     """
 
     def __init__(
         self,
-        text_input_dim: int = 384,
-        pca_input_dim: int = 5,
+        text_input_dim: int,
+        pca_input_dim: int,
+        text_head_hidden_dims: List[int],
+        pca_head_hidden_dims: List[int],
         shared_dim: int = 16,
-        text_head_hidden_dims: Optional[List[int]] = None,
         text_head_dropout: float = 0.3,
-        pca_head_hidden_dims: Optional[List[int]] = None,
         initial_temperature: float = 0.07,
     ):
         super().__init__()
@@ -104,14 +98,14 @@ class ContrastiveProjectionModel(nn.Module):
         # Text and PCA projection heads
         self.text_head = TextProjectionHead(
             input_dim=text_input_dim,
-            hidden_dims=text_head_hidden_dims or [128],
+            hidden_dims=text_head_hidden_dims,
             output_dim=shared_dim,
             dropout_p=text_head_dropout,
         )
 
         self.pca_head = PCAProjectionHead(
             input_dim=pca_input_dim,
-            hidden_dims=pca_head_hidden_dims or [32],
+            hidden_dims=pca_head_hidden_dims,
             output_dim=shared_dim,
         )
 

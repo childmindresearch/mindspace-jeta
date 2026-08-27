@@ -19,23 +19,13 @@ from src.trainer import Trainer
 from src.utils import TextEncoderWrapper, load_csv_dataset, generate_synthetic_csv
 
 
-def resolve_config_path(config_arg: str) -> str:
-    """If user did not specify a custom config file, automatically use config_best.yaml if it exists."""
-    if config_arg != "config.yaml":
-        return config_arg
-
-    if os.path.exists("config_best.yaml"):
-        print("[Config Resolution] Detected Optuna-tuned 'config_best.yaml'. Automatically using optimal configuration.")
-        return "config_best.yaml"
-    return "config.yaml"
-
-
 def main():
     parser = argparse.ArgumentParser(description="Train CLIP-Style Contrastive Projection Model")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to YAML configuration file")
+    parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if training file is missing")
     args = parser.parse_args()
 
-    config_path = resolve_config_path(args.config)
+    config_path = args.config
 
     print("=" * 70)
     print("      Contrastive Projection Model Training Pipeline")
@@ -51,14 +41,19 @@ def main():
     # 2. Check or Generate Dataset
     train_csv = config.dataset.train_csv_path
     if not os.path.exists(train_csv):
-        print(f"[Warning] Training CSV '{train_csv}' not found. Generating synthetic dataset (N=500)...")
-        generate_synthetic_csv(
-            output_csv_path=train_csv,
-            num_samples=500,
-            text_column=config.dataset.text_column,
-            pca_columns=config.dataset.pca_columns,
-            seed=config.training.seed,
-        )
+        if args.generate_synthetic:
+            print(f"[Synthetic Data] Training CSV '{train_csv}' not found. Generating synthetic dataset (N=500)...")
+            generate_synthetic_csv(
+                output_csv_path=train_csv,
+                text_column=config.dataset.text_column,
+                pca_columns=config.dataset.pca_columns,
+                num_samples=500,
+                seed=config.training.seed,
+            )
+        else:
+            print(f"[Dataset Error] Training dataset file not found at '{train_csv}'.")
+            print("Please check 'dataset.train_csv_path' in 'config.yaml' or pass '--generate_synthetic' to create a test dataset.")
+            sys.exit(1)
 
     # 3. Read CSV Dataset
     print(f"[2/5] Reading CSV dataset from '{train_csv}'...")
@@ -87,7 +82,8 @@ def main():
     dataset = JournalPCADataset(text_embeddings=text_embeddings, pca_scores=pca_matrix)
 
     # 5. Model Initialization & Training
-    print(f"[4/5] Initializing ContrastiveProjectionModel (Text Head: {text_dim}->{config.model_architecture.text_head_hidden_dims}->16, PCA Head: {pca_matrix.shape[1]}->{config.model_architecture.pca_head_hidden_dims}->16)...")
+    shared_dim = config.model_architecture.shared_dim
+    print(f"[4/5] Initializing ContrastiveProjectionModel (Text Head: {text_dim}->{config.model_architecture.text_head_hidden_dims}->{shared_dim}, PCA Head: {pca_matrix.shape[1]}->{config.model_architecture.pca_head_hidden_dims}->{shared_dim})...")
     model = ContrastiveProjectionModel(
         text_input_dim=text_dim,
         pca_input_dim=pca_matrix.shape[1],

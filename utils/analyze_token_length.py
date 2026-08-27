@@ -33,16 +33,6 @@ from src.config import load_config, save_config, Config
 from src.utils import generate_synthetic_csv
 
 
-def resolve_config_path(config_arg: str) -> str:
-    """If user did not specify a custom config file, automatically use config_best.yaml if it exists."""
-    if config_arg != "config.yaml":
-        return config_arg
-
-    if os.path.exists("config_best.yaml"):
-        return "config_best.yaml"
-    return "config.yaml"
-
-
 def get_tokenizer(model_name: str):
     """Instantiates a HuggingFace or SentenceTransformers tokenizer."""
     if AutoTokenizer is not None:
@@ -126,9 +116,10 @@ def main():
     parser.add_argument("--column", type=str, default=None, help="Text column header name to analyze")
     parser.add_argument("--percentile", type=float, default=95.0, help="Target percentile coverage (default: 95.0%)")
     parser.add_argument("--update_config", action="store_true", help="Automatically update max_seq_length in config YAML file")
+    parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if file to analyze is missing")
     args = parser.parse_args()
 
-    config_path = resolve_config_path(args.config)
+    config_path = args.config
 
     print("=" * 70)
     print("      MindSpace-CLIP Dataset Token & Text Length Scanner")
@@ -148,14 +139,19 @@ def main():
 
     # 2. Check or Generate Dataset
     if not os.path.exists(csv_path):
-        print(f"[Warning] CSV dataset '{csv_path}' not found. Generating synthetic dataset (N=500)...")
-        generate_synthetic_csv(
-            output_csv_path=csv_path,
-            num_samples=500,
-            text_column=text_column,
-            pca_columns=config.dataset.pca_columns,
-            seed=42,
-        )
+        if args.generate_synthetic:
+            print(f"[Synthetic Data] CSV dataset '{csv_path}' not found. Generating synthetic dataset (N=500)...")
+            generate_synthetic_csv(
+                output_csv_path=csv_path,
+                text_column=text_column,
+                pca_columns=config.dataset.pca_columns,
+                num_samples=500,
+                seed=42,
+            )
+        else:
+            print(f"[Dataset Error] Dataset file to analyze not found at '{csv_path}'.")
+            print("Please check '--csv' or 'dataset.train_csv_path' in 'config.yaml' or pass '--generate_synthetic' to create a test dataset.")
+            sys.exit(1)
 
     # 3. Read CSV File
     df = pd.read_csv(csv_path)

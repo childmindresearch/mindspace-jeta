@@ -4,7 +4,9 @@ Handles reading YAML configuration files and validating parameters.
 """
 
 import os
+import shutil
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 import yaml
 
@@ -15,6 +17,7 @@ class DatasetConfig:
     inference_csv_path: str = "./data/eval_data.csv"
     text_column: str = "journal_entry"
     pca_columns: List[str] = field(default_factory=lambda: ["PCA_1", "PCA_2", "PCA_3", "PCA_4", "PCA_5"])
+    sample_query_pca: List[float] = field(default_factory=lambda: [1.5, -1.0, 0.5, 0.0, 0.5])
 
     @property
     def pca_input_dim(self) -> int:
@@ -59,7 +62,8 @@ class PathsConfig:
 class OptunaConfig:
     n_trials: int = 25
     timeout: Optional[int] = None
-    best_config_path: str = "./config_best.yaml"
+    best_config_path: str = "./config.yaml"
+    archive_dir: str = "./config_archive"
 
 
 @dataclass
@@ -71,16 +75,30 @@ class Config:
     paths: PathsConfig = field(default_factory=PathsConfig)
     optuna: OptunaConfig = field(default_factory=OptunaConfig)
 
+    def validate(self) -> None:
+        """Validates configuration parameters and raises descriptive ValueError if invalid."""
+        if not self.dataset.text_column or not str(self.dataset.text_column).strip():
+            raise ValueError("[Configuration Error] 'dataset.text_column' must be defined as a non-empty string in config.yaml.")
+
+        if not self.dataset.pca_columns:
+            raise ValueError("[Configuration Error] 'dataset.pca_columns' must be defined as a non-empty list of column headers in config.yaml.")
+
+        if not self.model_architecture.text_head_hidden_dims:
+            raise ValueError("[Configuration Error] 'model_architecture.text_head_hidden_dims' must be defined as a non-empty list in config.yaml.")
+
+        if not self.model_architecture.pca_head_hidden_dims:
+            raise ValueError("[Configuration Error] 'model_architecture.pca_head_hidden_dims' must be defined as a non-empty list in config.yaml.")
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
-        """Build Config object from nested dictionary."""
+        """Build Config object from nested dictionary and validate schema."""
         dataset_cfg = DatasetConfig(**data.get("dataset", {}))
         text_cfg = TextEncoderConfig(**data.get("text_encoder", {}))
         model_cfg = ModelArchConfig(**data.get("model_architecture", {}))
         train_cfg = TrainingConfig(**data.get("training", {}))
         paths_cfg = PathsConfig(**data.get("paths", {}))
         optuna_cfg = OptunaConfig(**data.get("optuna", {}))
-        return cls(
+        cfg = cls(
             dataset=dataset_cfg,
             text_encoder=text_cfg,
             model_architecture=model_cfg,
@@ -88,6 +106,8 @@ class Config:
             paths=paths_cfg,
             optuna=optuna_cfg,
         )
+        cfg.validate()
+        return cfg
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert Config dataclass to nested dictionary for YAML export."""
@@ -97,6 +117,7 @@ class Config:
                 "inference_csv_path": self.dataset.inference_csv_path,
                 "text_column": self.dataset.text_column,
                 "pca_columns": self.dataset.pca_columns,
+                "sample_query_pca": self.dataset.sample_query_pca,
             },
             "text_encoder": {
                 "model_name": self.text_encoder.model_name,
@@ -128,6 +149,7 @@ class Config:
                 "n_trials": self.optuna.n_trials,
                 "timeout": self.optuna.timeout,
                 "best_config_path": self.optuna.best_config_path,
+                "archive_dir": self.optuna.archive_dir,
             },
         }
 
@@ -140,6 +162,24 @@ def save_config(config: Config, output_path: str) -> None:
     print(f"[Config] Saved configuration to '{output_path}'")
 
 
+def archive_existing_config(config_path: str = "config.yaml", archive_dir: str = "./config_archive") -> Optional[str]:
+    """Archives the existing configuration file into archive_dir with a timestamp identifier.
+
+    Returns the path to the archived file, or None if config_path does not exist.
+    """
+    if not os.path.exists(config_path):
+        return None
+
+    os.makedirs(archive_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_filename = f"config_{timestamp}.yaml"
+    archive_path = os.path.join(archive_dir, archive_filename)
+
+    shutil.copy2(config_path, archive_path)
+    print(f"[Config Archive] Archived existing '{config_path}' to '{archive_path}'")
+    return archive_path
+
+
 def load_config(config_path: str = "config.yaml") -> Config:
     """Load configuration from a YAML file. If not found, returns default Config."""
     if not os.path.exists(config_path):
@@ -150,3 +190,4 @@ def load_config(config_path: str = "config.yaml") -> Config:
         data = yaml.safe_load(f) or {}
 
     return Config.from_dict(data)
+

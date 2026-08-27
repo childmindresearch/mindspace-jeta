@@ -20,7 +20,7 @@ import numpy as np
 import optuna
 import torch
 
-from src.config import load_config, save_config, Config
+from src.config import load_config, save_config, archive_existing_config, Config
 from src.dataset import JournalPCADataset
 from src.models import ContrastiveProjectionModel
 from src.trainer import Trainer
@@ -90,10 +90,11 @@ def objective(
 
 def main():
     parser = argparse.ArgumentParser(description="Optuna Hyperparameter Tuning for Contrastive Projection Pipeline")
-    parser.add_argument("--config", type=str, default="config.yaml", help="Path to baseline YAML configuration file")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Path to YAML configuration file")
     parser.add_argument("--n_trials", type=int, default=None, help="Number of Optuna search trials")
     parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds for tuning")
-    parser.add_argument("--save_best", type=str, default=None, help="Path to save best tuned configuration file")
+    parser.add_argument("--save_best", type=str, default=None, help="Path to save updated configuration file")
+    parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if training file is missing")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -108,19 +109,24 @@ def main():
 
     print(f"[1/4] Loaded baseline config from '{args.config}'")
     print(f"      Search Trials: {n_trials}")
-    print(f"      Target Output Best Config: '{save_best_path}'")
+    print(f"      Target Config to Update: '{save_best_path}'")
 
     # 2. Check / Generate Dataset
     train_csv = base_config.dataset.train_csv_path
     if not os.path.exists(train_csv):
-        print(f"[Warning] Training CSV '{train_csv}' not found. Generating synthetic dataset (N=500)...")
-        generate_synthetic_csv(
-            output_csv_path=train_csv,
-            num_samples=500,
-            text_column=base_config.dataset.text_column,
-            pca_columns=base_config.dataset.pca_columns,
-            seed=base_config.training.seed,
-        )
+        if args.generate_synthetic:
+            print(f"[Synthetic Data] Training CSV '{train_csv}' not found. Generating synthetic dataset (N=500)...")
+            generate_synthetic_csv(
+                output_csv_path=train_csv,
+                text_column=base_config.dataset.text_column,
+                pca_columns=base_config.dataset.pca_columns,
+                num_samples=500,
+                seed=base_config.training.seed,
+            )
+        else:
+            print(f"[Dataset Error] Training dataset file not found at '{train_csv}'.")
+            print("Please check 'dataset.train_csv_path' in 'config.yaml' or pass '--generate_synthetic' to create a test dataset.")
+            sys.exit(1)
 
     # 3. Load & Pre-encode Dataset (Done ONCE to speed up trials!)
     print(f"[2/4] Reading dataset from '{train_csv}'...")
@@ -179,10 +185,14 @@ def main():
     best_config.model_architecture.pca_head_hidden_dims = ast.literal_eval(best_trial.params["pca_head_hidden_dims"])
     best_config.model_architecture.initial_temperature = float(best_trial.params["initial_temperature"])
 
-    # Update output paths to indicate tuned model
-    best_config.paths.model_checkpoint = "./outputs/contrastive_model_tuned.pt"
-    best_config.paths.embeddings_output = "./outputs/projected_embeddings_tuned.pt"
+    # Preserve configured output checkpoint paths
+    best_config.paths.model_checkpoint = base_config.paths.model_checkpoint
+    best_config.paths.embeddings_output = base_config.paths.embeddings_output
 
+    # Archive existing config before overwriting with tuned parameters
+    archive_existing_config(config_path=save_best_path, archive_dir=base_config.optuna.archive_dir)
+
+    # Save tuned parameters in-place
     save_config(best_config, save_best_path)
 
     print(f"\n To train a model using these optimal hyperparameters, run:")
@@ -192,3 +202,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

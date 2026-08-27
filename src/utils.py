@@ -92,19 +92,22 @@ def load_csv_dataset(csv_path: str, text_column: str, pca_columns: List[str]) ->
 
 def generate_synthetic_csv(
     output_csv_path: str,
+    text_column: str,
+    pca_columns: List[str],
     num_samples: int = 500,
-    text_column: str = "journal_entry",
-    pca_columns: Optional[List[str]] = None,
     seed: int = 42,
 ) -> None:
     """Generates a synthetic CSV file containing realistic journal entries and correlated PCA component scores."""
+    if not text_column or not str(text_column).strip():
+        raise ValueError("[Data Error] 'text_column' must be explicitly provided as a non-empty string.")
+
+    if not pca_columns:
+        raise ValueError("[Data Error] 'pca_columns' must be explicitly provided as a non-empty list of column headers.")
+
     np.random.seed(seed)
     random.seed(seed)
 
-    if pca_columns is None:
-        pca_columns = ["PCA_1", "PCA_2", "PCA_3", "PCA_4", "PCA_5"]
-
-    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_csv_path) or ".", exist_ok=True)
 
     # Sample journal entry text fragments
     topics = [

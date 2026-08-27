@@ -25,20 +25,11 @@ from src.inference import CLIPPCAPipeline
 from src.utils import load_csv_dataset, generate_synthetic_csv
 
 
-def resolve_config_path(config_arg: str) -> str:
-    """If user did not specify a custom config file, automatically use config_best.yaml if it exists."""
-    if config_arg != "config.yaml":
-        return config_arg
-
-    if os.path.exists("config_best.yaml"):
-        print("[Config Resolution] Detected Optuna-tuned 'config_best.yaml'. Automatically using optimal configuration.")
-        return "config_best.yaml"
-    return "config.yaml"
-
-
 def compute_mrr(similarity_matrix: np.ndarray) -> float:
     """Computes Mean Reciprocal Rank (MRR) across similarity matrix diagonal targets."""
     n = similarity_matrix.shape[0]
+    if n == 0:
+        return 0.0
     ranks = []
     for i in range(n):
         sims = similarity_matrix[i]
@@ -52,6 +43,8 @@ def compute_mrr(similarity_matrix: np.ndarray) -> float:
 def compute_topk(similarity_matrix: np.ndarray, k: int = 1) -> float:
     """Computes Top-K retrieval accuracy across similarity matrix diagonal targets."""
     n = similarity_matrix.shape[0]
+    if n == 0:
+        return 0.0
     k = min(k, n)
     correct = 0
     for i in range(n):
@@ -75,9 +68,10 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate Model Accuracy on Held-Out Test Dataset")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to YAML configuration file")
     parser.add_argument("--test_csv", type=str, default=None, help="Path to held-out test CSV dataset")
+    parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if test file is missing")
     args = parser.parse_args()
 
-    config_path = resolve_config_path(args.config)
+    config_path = args.config
 
     print("=" * 70)
     print("      Contrastive Projection Model Test Performance Evaluation")
@@ -92,16 +86,21 @@ def main():
         print(f"[Error] Trained model checkpoint not found at '{checkpoint_path}'. Run `python train.py` first.")
         sys.exit(1)
 
-    # Ensure test CSV exists (generate synthetic test data if missing)
+    # Ensure test CSV exists (generate synthetic test data if requested)
     if not os.path.exists(test_csv_path):
-        print(f"[Warning] Test CSV '{test_csv_path}' not found. Generating synthetic test dataset (N=100)...")
-        generate_synthetic_csv(
-            output_csv_path=test_csv_path,
-            num_samples=100,
-            text_column=config.dataset.text_column,
-            pca_columns=config.dataset.pca_columns,
-            seed=999,
-        )
+        if args.generate_synthetic:
+            print(f"[Synthetic Data] Test CSV '{test_csv_path}' not found. Generating synthetic test dataset (N=100)...")
+            generate_synthetic_csv(
+                output_csv_path=test_csv_path,
+                text_column=config.dataset.text_column,
+                pca_columns=config.dataset.pca_columns,
+                num_samples=100,
+                seed=999,
+            )
+        else:
+            print(f"[Dataset Error] Test dataset file not found at '{test_csv_path}'.")
+            print("Please check 'dataset.inference_csv_path' in 'config.yaml' or pass '--generate_synthetic' to create a test dataset.")
+            sys.exit(1)
 
     # 2. Load Test Dataset
     print(f"[1/4] Reading held-out test dataset from '{test_csv_path}'...")

@@ -37,7 +37,7 @@ class CLIPPCAPipeline:
 
     @classmethod
     def load_from_checkpoint(
-        self_cls,
+        cls,
         checkpoint_path: str,
         config: Optional[Config] = None,
         device: Optional[str] = None,
@@ -71,7 +71,7 @@ class CLIPPCAPipeline:
 
         model.load_state_dict(checkpoint["model_state_dict"])
         print("[InferencePipeline] Checkpoint successfully loaded.")
-        return self_cls(model=model, text_encoder=text_encoder, config=config, device=device)
+        return cls(model=model, text_encoder=text_encoder, config=config, device=device)
 
     def predict_shared_embedding(self, text_list: List[str]) -> np.ndarray:
         """Converts raw text strings to 16D shared space vectors using the text encoder and trained text head."""

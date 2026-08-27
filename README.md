@@ -50,7 +50,7 @@ The system maps both **high-dimensional text embeddings** (e.g., 384D from `all-
 - 🧬 **Dynamic Projection Heads**: Automatically scales input text dimensions (384D/1024D) and PCA component counts (5D, 8D, 10D).
 - 🔍 **Direct Text-to-PCA Prediction**: Maps $1...N$ free-text entries directly into predicted 5D PCA component score matrices (`outputs/predicted_pca_scores.csv`).
 - 🔄 **Cross-Modal Retrieval**: Query ranked journal entries matching arbitrary target 5D PCA psychological profiles.
-- 🎯 **Optuna Fine-Tuning (`tune.py`)**: Automatic TPE hyperparameter optimization and fine-tuning with instant export to `config_best.yaml`.
+- 🎯 **Optuna Fine-Tuning & Archiving (`tune.py`)**: Automatic TPE hyperparameter optimization. Prior configurations are automatically archived to `config_archive/config_YYYYMMDD_HHMMSS.yaml` before updating `config.yaml` in-place.
 - 📊 **Detailed Training Logs & Diagnostics**: Generates epoch-by-epoch CSV metrics (`training_metrics.csv`), summary JSON (`training_summary.json`), and 4-panel diagnostic plots (`loss_curves.png`).
 - 📈 **Held-Out Test Evaluation (`evaluate.py`)**: Computes Top-1/Top-5 accuracy, Mean Reciprocal Rank (MRR), $R^2$ variance score, MAE, RMSE, and separation margin.
 
@@ -60,8 +60,9 @@ The system maps both **high-dimensional text embeddings** (e.g., 384D from `all-
 
 ```
 CLIP/
-├── config.yaml              # Central configuration file (CSV paths, column headers, model hparams)
-├── config_best.yaml         # Automatically exported Optuna optimal configuration
+├── config.yaml              # Unified configuration file (CSV paths, column headers, model hparams)
+├── config_archive/          # Archive folder storing timestamped prior configurations
+│   └── config_20260827_112446.yaml
 ├── train.py                 # Model training & validation orchestrator
 ├── predict.py               # Direct text-to-PCA prediction & cross-modal retrieval
 ├── evaluate.py              # Held-out test performance evaluation & metrics report
@@ -74,12 +75,11 @@ CLIP/
 │   └── analyze_token_length.py # Tokenizer scanner & 95% coverage recommendation tool
 ├── outputs/                 # Directory for model checkpoints and output embeddings
 │   ├── contrastive_model.pt # Trained model checkpoint
-│   ├── contrastive_model_tuned.pt # Optuna-tuned model checkpoint
 │   ├── predicted_pca_scores.csv   # Text-to-5D PCA predictions
 │   └── logs/                # Training metrics CSV, summary JSON, and 4-panel diagnostic plots
 └── src/                     # Core package library
     ├── __init__.py
-    ├── config.py            # Dataclass loader, validator, and exporter
+    ├── config.py            # Dataclass loader, validator, exporter & timestamp archiver
     ├── models.py            # PyTorch ContrastiveProjectionModel (Text Head, PCA Head, Temperature)
     ├── dataset.py           # PyTorch Dataset for paired mini-batch loading
     ├── utils.py             # SentenceTransformer wrapper, CSV parser, synthetic generator
@@ -117,6 +117,12 @@ dataset:
     - "PCA_3"
     - "PCA_4"
     - "PCA_5"
+  sample_query_pca:
+    - 1.5
+    - -1.0
+    - 0.5
+    - 0.0
+    - 0.5
 
 text_encoder:
   model_name: "sentence-transformers/all-MiniLM-L6-v2"
@@ -139,6 +145,12 @@ training:
   epochs: 25
   train_split: 0.8
   seed: 42
+
+optuna:
+  n_trials: 25
+  timeout: null
+  best_config_path: "./config.yaml"
+  archive_dir: "./config_archive"
 ```
 
 ---
@@ -151,26 +163,25 @@ Scans your input CSV file, tokenizes all free-text entries, and calculates the r
 python utils/analyze_token_length.py --percentile 95.0 --update_config
 ```
 
-### 2. Training the Model
-Runs mini-batch training with an 80/20 train/validation split, logs metrics per epoch to `outputs/logs/`, and saves model checkpoints:
-```bash
-python train.py
-```
-> *Note: If `config_best.yaml` is present, `train.py` automatically uses the optimal Optuna config!*
-
 ### 2. Optuna Hyperparameter Optimization & Fine-Tuning
-Searches over learning rates, weight decay, hidden dimensions, dropout, temperature, and batch sizes, saving the best parameters to `config_best.yaml`:
+Searches over learning rates, weight decay, hidden dimensions, dropout, temperature, and batch sizes. Automatically archives the current `config.yaml` to `config_archive/config_YYYYMMDD_HHMMSS.yaml` and updates `config.yaml` in-place:
 ```bash
 python tune.py --n_trials 25
 ```
 
-### 3. Direct Text-to-PCA Prediction & Cross-Modal Retrieval
+### 3. Training the Model
+Runs mini-batch training with an 80/20 train/validation split using `config.yaml`, logs metrics per epoch to `outputs/logs/`, and saves model checkpoints:
+```bash
+python train.py
+```
+
+### 4. Direct Text-to-PCA Prediction & Cross-Modal Retrieval
 Projects test texts to 16D shared space, exports estimated 5D PCA component scores to `outputs/predicted_pca_scores.csv`, and runs sample cross-modal retrieval queries:
 ```bash
 python predict.py
 ```
 
-### 4. Held-Out Test Performance Evaluation
+### 5. Held-Out Test Performance Evaluation
 Runs a rigorous accuracy evaluation on a held-out test dataset, computing Top-1/Top-5 retrieval accuracy, MRR, $R^2$ scores, MAE, and separation margins:
 ```bash
 python evaluate.py --test_csv ./data/eval_data.csv
@@ -185,7 +196,7 @@ from src.inference import CLIPPCAPipeline
 import pandas as pd
 
 # 1. Load trained pipeline checkpoint
-pipeline = CLIPPCAPipeline.load_from_checkpoint('./outputs/contrastive_model_tuned.pt')
+pipeline = CLIPPCAPipeline.load_from_checkpoint('./outputs/contrastive_model.pt')
 
 # 2. Load reference dataset
 ref_df = pd.read_csv('./data/train_data.csv')
