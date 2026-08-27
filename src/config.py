@@ -1,0 +1,152 @@
+"""
+Configuration loader and schema definition module.
+Handles reading YAML configuration files and validating parameters.
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+import yaml
+
+
+@dataclass
+class DatasetConfig:
+    train_csv_path: str = "./data/train_data.csv"
+    inference_csv_path: str = "./data/eval_data.csv"
+    text_column: str = "journal_entry"
+    pca_columns: List[str] = field(default_factory=lambda: ["PCA_1", "PCA_2", "PCA_3", "PCA_4", "PCA_5"])
+
+    @property
+    def pca_input_dim(self) -> int:
+        return len(self.pca_columns)
+
+
+@dataclass
+class TextEncoderConfig:
+    model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    max_seq_length: int = 256
+    text_input_dim: Optional[int] = None  # Auto-detected if None
+
+
+@dataclass
+class ModelArchConfig:
+    shared_dim: int = 16
+    text_head_hidden_dims: List[int] = field(default_factory=lambda: [128])
+    text_head_dropout: float = 0.3
+    pca_head_hidden_dims: List[int] = field(default_factory=lambda: [32])
+    initial_temperature: float = 0.07
+
+
+@dataclass
+class TrainingConfig:
+    batch_size: int = 32
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-2
+    epochs: int = 25
+    train_split: float = 0.8
+    seed: int = 42
+
+
+@dataclass
+class PathsConfig:
+    output_dir: str = "./outputs"
+    logs_dir: str = "./outputs/logs"
+    model_checkpoint: str = "./outputs/contrastive_model.pt"
+    embeddings_output: str = "./outputs/projected_embeddings.pt"
+
+
+@dataclass
+class OptunaConfig:
+    n_trials: int = 25
+    timeout: Optional[int] = None
+    best_config_path: str = "./config_best.yaml"
+
+
+@dataclass
+class Config:
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    text_encoder: TextEncoderConfig = field(default_factory=TextEncoderConfig)
+    model_architecture: ModelArchConfig = field(default_factory=ModelArchConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    paths: PathsConfig = field(default_factory=PathsConfig)
+    optuna: OptunaConfig = field(default_factory=OptunaConfig)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Config":
+        """Build Config object from nested dictionary."""
+        dataset_cfg = DatasetConfig(**data.get("dataset", {}))
+        text_cfg = TextEncoderConfig(**data.get("text_encoder", {}))
+        model_cfg = ModelArchConfig(**data.get("model_architecture", {}))
+        train_cfg = TrainingConfig(**data.get("training", {}))
+        paths_cfg = PathsConfig(**data.get("paths", {}))
+        optuna_cfg = OptunaConfig(**data.get("optuna", {}))
+        return cls(
+            dataset=dataset_cfg,
+            text_encoder=text_cfg,
+            model_architecture=model_cfg,
+            training=train_cfg,
+            paths=paths_cfg,
+            optuna=optuna_cfg,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert Config dataclass to nested dictionary for YAML export."""
+        return {
+            "dataset": {
+                "train_csv_path": self.dataset.train_csv_path,
+                "inference_csv_path": self.dataset.inference_csv_path,
+                "text_column": self.dataset.text_column,
+                "pca_columns": self.dataset.pca_columns,
+            },
+            "text_encoder": {
+                "model_name": self.text_encoder.model_name,
+                "max_seq_length": self.text_encoder.max_seq_length,
+                "text_input_dim": self.text_encoder.text_input_dim,
+            },
+            "model_architecture": {
+                "shared_dim": self.model_architecture.shared_dim,
+                "text_head_hidden_dims": self.model_architecture.text_head_hidden_dims,
+                "text_head_dropout": self.model_architecture.text_head_dropout,
+                "pca_head_hidden_dims": self.model_architecture.pca_head_hidden_dims,
+                "initial_temperature": self.model_architecture.initial_temperature,
+            },
+            "training": {
+                "batch_size": self.training.batch_size,
+                "learning_rate": self.training.learning_rate,
+                "weight_decay": self.training.weight_decay,
+                "epochs": self.training.epochs,
+                "train_split": self.training.train_split,
+                "seed": self.training.seed,
+            },
+            "paths": {
+                "output_dir": self.paths.output_dir,
+                "logs_dir": self.paths.logs_dir,
+                "model_checkpoint": self.paths.model_checkpoint,
+                "embeddings_output": self.paths.embeddings_output,
+            },
+            "optuna": {
+                "n_trials": self.optuna.n_trials,
+                "timeout": self.optuna.timeout,
+                "best_config_path": self.optuna.best_config_path,
+            },
+        }
+
+
+def save_config(config: Config, output_path: str) -> None:
+    """Save Config object to a YAML file."""
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        yaml.dump(config.to_dict(), f, default_flow_style=False, sort_keys=False)
+    print(f"[Config] Saved configuration to '{output_path}'")
+
+
+def load_config(config_path: str = "config.yaml") -> Config:
+    """Load configuration from a YAML file. If not found, returns default Config."""
+    if not os.path.exists(config_path):
+        print(f"[Warning] Config file '{config_path}' not found. Using default configurations.")
+        return Config()
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    return Config.from_dict(data)
