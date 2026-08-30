@@ -43,3 +43,7 @@ optuna:
   timeout: null
   best_config_path: ./config.yaml
   archive_dir: ./config_archive
+
+evaluation:
+  use_standardized_dominant_argmax: true
+

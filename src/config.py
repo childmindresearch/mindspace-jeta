@@ -73,6 +73,11 @@ class OptunaConfig:
 
 
 @dataclass
+class EvaluationConfig:
+    use_standardized_dominant_argmax: bool = True
+
+
+@dataclass
 class Config:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     text_encoder: TextEncoderConfig = field(default_factory=TextEncoderConfig)
@@ -80,6 +85,7 @@ class Config:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     optuna: OptunaConfig = field(default_factory=OptunaConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
 
     def validate(self) -> None:
         """Validates configuration parameters and raises descriptive ValueError if invalid."""
@@ -104,6 +110,7 @@ class Config:
         train_cfg = TrainingConfig(**data.get("training", {}))
         paths_cfg = PathsConfig(**data.get("paths", {}))
         optuna_cfg = OptunaConfig(**data.get("optuna", {}))
+        eval_cfg = EvaluationConfig(**data.get("evaluation", {}))
         cfg = cls(
             dataset=dataset_cfg,
             text_encoder=text_cfg,
@@ -111,6 +118,7 @@ class Config:
             training=train_cfg,
             paths=paths_cfg,
             optuna=optuna_cfg,
+            evaluation=eval_cfg,
         )
         cfg.validate()
         return cfg
@@ -156,6 +164,9 @@ class Config:
                 "timeout": self.optuna.timeout,
                 "best_config_path": self.optuna.best_config_path,
                 "archive_dir": self.optuna.archive_dir,
+            },
+            "evaluation": {
+                "use_standardized_dominant_argmax": self.evaluation.use_standardized_dominant_argmax,
             },
         }
 

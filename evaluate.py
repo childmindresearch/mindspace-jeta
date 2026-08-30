@@ -109,20 +109,33 @@ def compute_dominant_component_metrics(
     y_pred: np.ndarray,
     pca_columns: list,
     use_abs: bool = False,
+    use_standardized: bool = True,
 ) -> Dict[str, Any]:
-    """Computes Top-1 & Top-2 classification accuracy, confusion matrix, and per-trait F1 metrics for dominant PCA trait identification."""
+    """Computes Top-1 & Top-2 classification accuracy, confusion matrix, and per-trait F1 metrics for dominant PCA trait identification.
+    
+    If use_standardized is True, applies column-wise Z-score scaling (z = (y_pred - mu) / sigma) to remove magnitude bias prior to argmax.
+    """
     n = y_true.shape[0]
     num_components = len(pca_columns)
     if n == 0:
         return {}
 
+    # Apply column-wise Z-score standardization if requested
+    if use_standardized:
+        mean_pred = np.mean(y_pred, axis=0, keepdims=True)
+        std_pred = np.std(y_pred, axis=0, keepdims=True)
+        std_pred = np.where(std_pred == 0, 1e-8, std_pred)
+        y_pred_eval = (y_pred - mean_pred) / std_pred
+    else:
+        y_pred_eval = y_pred
+
     # Extract dominant component index for ground truth and predictions
     if use_abs:
         y_true_dom = np.argmax(np.abs(y_true), axis=1)
-        y_pred_dom = np.argmax(np.abs(y_pred), axis=1)
+        y_pred_dom = np.argmax(np.abs(y_pred_eval), axis=1)
     else:
         y_true_dom = np.argmax(y_true, axis=1)
-        y_pred_dom = np.argmax(y_pred, axis=1)
+        y_pred_dom = np.argmax(y_pred_eval, axis=1)
 
     # Top-1 Dominant Accuracy
     top1_correct = np.sum(y_true_dom == y_pred_dom)
@@ -132,9 +145,9 @@ def compute_dominant_component_metrics(
     top2_correct = 0
     for i in range(n):
         if use_abs:
-            top2_indices = np.argsort(-np.abs(y_pred[i]))[:2]
+            top2_indices = np.argsort(-np.abs(y_pred_eval[i]))[:2]
         else:
-            top2_indices = np.argsort(-y_pred[i])[:2]
+            top2_indices = np.argsort(-y_pred_eval[i])[:2]
         if y_true_dom[i] in top2_indices:
             top2_correct += 1
     top2_acc = float(top2_correct / n)
@@ -166,8 +179,11 @@ def compute_dominant_component_metrics(
     random_baseline_top1 = 1.0 / num_components
     random_baseline_top2 = min(1.0, 2.0 / num_components)
 
+    criterion_name = ("standardized_" if use_standardized else "raw_") + ("absolute_value" if use_abs else "signed_value")
+
     return {
-        "dominant_criterion": "absolute_value" if use_abs else "signed_value",
+        "dominant_criterion": criterion_name,
+        "use_standardized_argmax": use_standardized,
         "top1_dominant_accuracy": top1_acc,
         "top2_dominant_accuracy": top2_acc,
         "random_baseline_top1": random_baseline_top1,
@@ -322,6 +338,8 @@ def main():
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to YAML configuration file")
     parser.add_argument("--test_csv", type=str, default=None, help="Path to held-out test CSV dataset")
     parser.add_argument("--use_abs_dominant", action="store_true", help="Use absolute value magnitude to define dominant PCA component")
+    parser.add_argument("--use_standardized_dominant", dest="use_standardized_dominant", action="store_true", default=None, help="Force Z-score standardization before dominant PCA argmax")
+    parser.add_argument("--no_standardized_dominant", dest="use_standardized_dominant", action="store_false", default=None, help="Disable Z-score standardization before dominant PCA argmax")
     parser.add_argument("--generate_synthetic", action="store_true", help="Generate synthetic CSV dataset if test file is missing")
     args = parser.parse_args()
 
@@ -335,6 +353,12 @@ def main():
     config = load_config(config_path)
     test_csv_path = args.test_csv or config.dataset.inference_csv_path
     checkpoint_path = config.paths.model_checkpoint
+
+    # Resolve Z-score standardization toggle from CLI override or config
+    if args.use_standardized_dominant is not None:
+        use_standardized_dominant = args.use_standardized_dominant
+    else:
+        use_standardized_dominant = config.evaluation.use_standardized_dominant_argmax
 
     if not os.path.exists(checkpoint_path):
         print(f"[Error] Trained model checkpoint not found at '{checkpoint_path}'. Run `python train.py` first.")
@@ -415,6 +439,7 @@ def main():
         y_pred=predicted_pca_matrix,
         pca_columns=config.dataset.pca_columns,
         use_abs=args.use_abs_dominant,
+        use_standardized=use_standardized_dominant,
     )
 
     # E. Shared Metric Space Alignment Quality
