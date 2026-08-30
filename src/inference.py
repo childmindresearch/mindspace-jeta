@@ -193,3 +193,8 @@ class CLIPPCAPipeline:
         predicted_pca = np.dot(attn_weights, reference_pca_matrix)  # (N, 5)
 
         return predicted_pca.astype(np.float32)
+
+
+# Alias for MindSpace-CLAP pipeline naming convention
+CLAPPCAPipeline = CLIPPCAPipeline
+

@@ -122,7 +122,7 @@ def main():
     config_path = args.config
 
     print("=" * 70)
-    print("      MindSpace-CLIP Dataset Token & Text Length Scanner")
+    print("      MindSpace-CLAP Dataset Token & Text Length Scanner")
     print("=" * 70)
 
     # 1. Load Configuration
