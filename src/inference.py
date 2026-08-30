@@ -49,24 +49,37 @@ class CLIPPCAPipeline:
         print(f"[InferencePipeline] Loading checkpoint from '{checkpoint_path}'...")
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-        if config is None:
-            config = checkpoint.get("config", Config())
+        # Prioritize architecture and encoder parameters saved inside checkpoint to prevent state_dict mismatch
+        ckpt_config = checkpoint.get("config", None)
+        if ckpt_config is not None:
+            if config is None:
+                config = ckpt_config
+            else:
+                config.model_architecture = ckpt_config.model_architecture
+                config.text_encoder = ckpt_config.text_encoder
+                config.dataset.pca_columns = ckpt_config.dataset.pca_columns
+        elif config is None:
+            config = Config()
+
+        arch_config = config.model_architecture
+        text_enc_config = config.text_encoder
+        pca_input_dim = config.dataset.pca_input_dim
 
         text_encoder = TextEncoderWrapper(
-            model_name=config.text_encoder.model_name,
-            max_seq_length=config.text_encoder.max_seq_length,
+            model_name=text_enc_config.model_name,
+            max_seq_length=text_enc_config.max_seq_length,
         )
 
-        text_input_dim = config.text_encoder.text_input_dim or text_encoder.embedding_dim
+        text_input_dim = text_enc_config.text_input_dim or text_encoder.embedding_dim
 
         model = ContrastiveProjectionModel(
             text_input_dim=text_input_dim,
-            pca_input_dim=config.dataset.pca_input_dim,
-            shared_dim=config.model_architecture.shared_dim,
-            text_head_hidden_dims=config.model_architecture.text_head_hidden_dims,
-            text_head_dropout=config.model_architecture.text_head_dropout,
-            pca_head_hidden_dims=config.model_architecture.pca_head_hidden_dims,
-            initial_temperature=config.model_architecture.initial_temperature,
+            pca_input_dim=pca_input_dim,
+            shared_dim=arch_config.shared_dim,
+            text_head_hidden_dims=arch_config.text_head_hidden_dims,
+            text_head_dropout=arch_config.text_head_dropout,
+            pca_head_hidden_dims=arch_config.pca_head_hidden_dims,
+            initial_temperature=arch_config.initial_temperature,
         )
 
         model.load_state_dict(checkpoint["model_state_dict"])
