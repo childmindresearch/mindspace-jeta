@@ -208,6 +208,8 @@ class CLIPPCAPipeline:
         return predicted_pca.astype(np.float32)
 
 
-# Alias for MindSpace-CLAP pipeline naming convention
+# Aliases for MindSpace-JETA pipeline naming convention
+JETAPCAPipeline = CLIPPCAPipeline
 CLAPPCAPipeline = CLIPPCAPipeline
+
 

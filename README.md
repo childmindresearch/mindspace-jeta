@@ -1,4 +1,4 @@
-# MindSpace-CLAP: Free-Text to PCA Psychological Component Metric Space
+# MindSpace-JETA: Joint-Embedding Text-PCA Alignment Pipeline
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
@@ -6,7 +6,7 @@
 [![Optuna](https://img.shields.io/badge/Optuna-4.0%2B-44A833.svg)](https://optuna.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**MindSpace-CLAP** (**C**ontrastive **L**anguage-**P**CA **A**lignment) is a Python pipeline in **PyTorch** that implements a contrastive projection model to align unstructured free-text responses with a multi-dimensional PCA psychological component score space.
+**MindSpace-JETA** (**J**oint-**E**mbedding **T**ext-PCA **A**lignment) is a Python pipeline in **PyTorch** that aligns unstructured free-text responses with a multi-dimensional PCA psychological component score space in a shared joint embedding metric space.
 
 ---
 
