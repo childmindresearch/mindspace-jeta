@@ -32,7 +32,7 @@ class DatasetConfig:
 
 @dataclass
 class TextEncoderConfig:
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    model_name: str = "BAAI/bge-large-en-v1.5"
     max_seq_length: int = 256
     text_input_dim: Optional[int] = None
 
@@ -54,6 +54,7 @@ class TrainingConfig:
     epochs: int = 25
     train_split: float = 0.8
     seed: int = 42
+    mse_weight: float = 0.5
 
 
 @dataclass
@@ -152,6 +153,7 @@ class Config:
                 "epochs": self.training.epochs,
                 "train_split": self.training.train_split,
                 "seed": self.training.seed,
+                "mse_weight": self.training.mse_weight,
             },
             "paths": {
                 "output_dir": self.paths.output_dir,

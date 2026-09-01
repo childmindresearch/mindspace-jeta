@@ -12,7 +12,7 @@
 
 ## 📌 Architectural Overview
 
-The system maps **text embeddings** (extracted via `sentence-transformers`) and **PCA score vectors** into a **shared L2-normalized metric space** using symmetric InfoNCE cross-entropy loss.
+The system maps **text embeddings** (extracted via `BAAI/bge-large-en-v1.5`) and **PCA score vectors** into a **shared L2-normalized metric space** using a joint multi-task loss combining symmetric InfoNCE cross-entropy loss and direct 5D PCA coordinate MSE loss ($\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{InfoNCE}} + \alpha \cdot \mathcal{L}_{\text{MSE}}$).
 
 ```
  ┌─────────────────────────┐               ┌─────────────────────────┐
@@ -20,12 +20,12 @@ The system maps **text embeddings** (extracted via `sentence-transformers`) and 
  └────────────┬────────────┘               └────────────┬────────────┘
               │                                         │
     SentenceTransformer                                 │
- (all-MiniLM-L6-v2, 256)                               │
-              │ (384D)                                  │ (5D)
+  (BAAI/bge-large-en-v1.5)                              │
+              │ (1024D)                                 │ (5D)
               ▼                                         ▼
 ┌───────────────────────────┐             ┌───────────────────────────┐
 │   Text Projection Head    │             │   PCA Projection Head     │
-│  Linear(384 -> 128)       │             │    Linear(5 -> 32)        │
+│  Linear(1024 -> 128)      │             │    Linear(5 -> 32)        │
 │  BatchNorm1d(128)         │             │    BatchNorm1d(32)        │
 │  ReLU()                   │             │    ReLU()                 │
 │  Dropout(p=0.3)           │             │    Linear(32 -> 16)       │
@@ -35,20 +35,28 @@ The system maps **text embeddings** (extracted via `sentence-transformers`) and 
               ▼                                         ▼
       L2-Normalization                          L2-Normalization
               │                                         │
-              └──────────────────┬──────────────────────┘
-                                 ▼
-                     16D Shared Metric Space
-                  Symmetric InfoNCE / CLIP Loss
+              ├──────────────────┬──────────────────────┘
+              │                  ▼
+              │      16D Shared Metric Space
+              │   (Symmetric InfoNCE / CLIP Loss)
+              │
+              ▼
+  ┌─────────────────────────┐
+  │  Direct 5D PCA Decoder  │
+  │    Linear(16 -> 5)      │
+  │     (MSE Loss)          │
+  └─────────────────────────┘
 ```
 
 ---
 
 ## 🚀 Key Features
 
-- **Config-Driven (`config.yaml`)**: Set text model, sequence length, PCA column headers, layer dimensions, training parameters, and file output paths.
-- **Direct Text-to-PCA Estimation**: Predicts PCA component scores for text entries via similarity interpolation over reference exemplars (`outputs/predicted_pca_scores.csv`).
+- **Config-Driven (`config.yaml`)**: Set text model (`BAAI/bge-large-en-v1.5`), sequence length, PCA column headers, layer dimensions, `mse_weight`, training parameters, and file output paths.
+- **Joint Multi-Task Loss**: Optimizes ranking ($\mathcal{L}_{\text{InfoNCE}}$) and absolute 5D PCA coordinate regression ($\mathcal{L}_{\text{MSE}}$) simultaneously.
+- **Direct Text-to-PCA Estimation**: Predicts 5D PCA component scores directly via trained decoder head or exemplar interpolation (`outputs/predicted_pca_scores.csv`).
 - **Cross-Modal Retrieval**: Ranks text entries matching a target PCA profile vector.
-- **Optuna Tuning (`tune.py`)**: Optimizes learning rate, weight decay, layer dimensions, dropout, and batch size. Automatically archives prior `config.yaml` to `config_archive/` before updating in-place.
+- **Optuna Tuning (`tune.py`)**: Optimizes learning rate, weight decay, `mse_weight`, layer dimensions, dropout, and batch size. Tracks global best checkpoint in real-time. Automatically archives prior `config.yaml` to `config_archive/` before updating in-place.
 - **Metrics & Diagnostic Plotting**: Logs epoch metrics (`training_metrics.csv`), summary JSON (`training_summary.json`), and diagnostic loss curves (`loss_curves.png`).
 - **Test Evaluation (`evaluate.py`)**: Computes Top-1/Top-5 retrieval accuracy, Mean Reciprocal Rank (MRR), $R^2$ scores, MAE, RMSE, and separation margins on test data.
 
@@ -72,7 +80,7 @@ mindspace-clip/
     ├── models.py            # TextProjectionHead, PCAProjectionHead, ContrastiveProjectionModel
     ├── dataset.py           # JournalPCADataset PyTorch Dataset
     ├── utils.py             # TextEncoderWrapper, load_csv_dataset, generate_synthetic_csv
-    ├── trainer.py           # SymmetricCLIPLoss, Trainer class, diagnostic plotting
+    ├── trainer.py           # HybridCLIPMSELoss, Trainer class, diagnostic plotting
     └── inference.py         # CLIPPCAPipeline inference engine
 ```
 
@@ -114,9 +122,9 @@ dataset:
     - 0.5
 
 text_encoder:
-  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  model_name: "BAAI/bge-large-en-v1.5"
   max_seq_length: 256
-  text_input_dim: 384
+  text_input_dim: 1024
 
 model_architecture:
   shared_dim: 16
@@ -134,6 +142,7 @@ training:
   epochs: 25
   train_split: 0.8
   seed: 42
+  mse_weight: 0.5
 
 paths:
   output_dir: "./outputs"

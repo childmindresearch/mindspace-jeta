@@ -108,6 +108,9 @@ class ContrastiveProjectionModel(nn.Module):
             output_dim=shared_dim,
         )
 
+        # Direct 5D PCA decoder head mapping shared space representation to predicted PCA components
+        self.pca_decoder = nn.Linear(shared_dim, pca_input_dim)
+
         # Learnable logit scale parameter initialized to log(1 / initial_temperature)
         init_scale = math.log(1.0 / initial_temperature)
         self.logit_scale = nn.Parameter(torch.ones([]) * init_scale)
@@ -124,18 +127,25 @@ class ContrastiveProjectionModel(nn.Module):
         normalized = F.normalize(projected, p=2, dim=-1)
         return normalized
 
-    def forward(self, text_embeds: torch.Tensor, pca_scores: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def predict_pca(self, text_shared: torch.Tensor) -> torch.Tensor:
+        """Predicts continuous 5D PCA component score vector directly from shared space text representation."""
+        return self.pca_decoder(text_shared)
+
+    def forward(
+        self, text_embeds: torch.Tensor, pca_scores: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass for mini-batch training.
 
         Returns:
-            Tuple of (text_shared, pca_shared, logit_scale)
+            Tuple of (text_shared, pca_shared, logit_scale_exp, predicted_pca)
         """
         text_shared = self.encode_text(text_embeds)
         pca_shared = self.encode_pca(pca_scores)
+        predicted_pca = self.predict_pca(text_shared)
 
         # Clamp logit scale to prevent numerical instability (max exp scale = 100.0)
         with torch.no_grad():
             self.logit_scale.clamp_(0, math.log(100.0))
 
         logit_scale_exp = self.logit_scale.exp()
-        return text_shared, pca_shared, logit_scale_exp
+        return text_shared, pca_shared, logit_scale_exp, predicted_pca

@@ -169,19 +169,21 @@ class CLIPPCAPipeline:
     def predict_pca_components(
         self,
         text_list: List[str],
-        reference_pca_matrix: np.ndarray,
+        reference_pca_matrix: Optional[np.ndarray] = None,
         reference_texts: Optional[List[str]] = None,
         temperature: float = 10.0,
+        use_direct_head: bool = True,
     ) -> np.ndarray:
         """Maps 1...N raw free-text journal entries to predicted 5D PCA component score space.
 
-        Uses kernel-weighted similarity interpolation in the shared metric space over reference exemplars.
+        Uses direct trained 5D linear decoder head or kernel-weighted similarity interpolation over exemplars.
 
         Args:
             text_list: List of N raw text strings.
-            reference_pca_matrix: Reference dataset 5D PCA score matrix of shape (M, 5).
+            reference_pca_matrix: Optional reference dataset 5D PCA score matrix of shape (M, 5).
             reference_texts: Optional list of M reference text entries.
             temperature: Softmax temperature scaling factor for similarity weighting.
+            use_direct_head: If True, uses the trained direct 5D PCA decoder head.
 
         Returns:
             Predicted PCA component matrix of shape (N, 5).
@@ -192,20 +194,23 @@ class CLIPPCAPipeline:
         # 1. Project input text entries to shared space (N, shared_dim)
         text_shared = self.predict_shared_embedding(text_list)
 
-        # 2. Project reference PCA scores to shared space (M, shared_dim)
-        ref_pca_shared = self.pca_to_shared_embedding(reference_pca_matrix)
+        # 2. Direct head prediction using trained 5D PCA decoder
+        if use_direct_head and hasattr(self.model, "pca_decoder"):
+            with torch.no_grad():
+                tensor_in = torch.from_numpy(text_shared).float().to(self.device)
+                predicted_pca = self.model.predict_pca(tensor_in).cpu().numpy()
+            return predicted_pca.astype(np.float32)
 
-        # 3. Compute pairwise cosine similarity matrix (N, M)
-        sim_matrix = np.dot(text_shared, ref_pca_shared.T)
+        # 3. Softmax temperature-weighted interpolation over reference exemplars
+        if reference_pca_matrix is not None:
+            ref_pca_shared = self.pca_to_shared_embedding(reference_pca_matrix)
+            sim_matrix = np.dot(text_shared, ref_pca_shared.T)
+            exp_sims = np.exp(temperature * (sim_matrix - np.max(sim_matrix, axis=1, keepdims=True)))
+            attn_weights = exp_sims / np.sum(exp_sims, axis=1, keepdims=True)  # (N, M)
+            predicted_pca = np.dot(attn_weights, reference_pca_matrix)  # (N, 5)
+            return predicted_pca.astype(np.float32)
 
-        # 4. Softmax temperature weighting over reference exemplars
-        exp_sims = np.exp(temperature * (sim_matrix - np.max(sim_matrix, axis=1, keepdims=True)))
-        attn_weights = exp_sims / np.sum(exp_sims, axis=1, keepdims=True)  # (N, M)
-
-        # 5. Weighted combination of reference 5D PCA component scores
-        predicted_pca = np.dot(attn_weights, reference_pca_matrix)  # (N, 5)
-
-        return predicted_pca.astype(np.float32)
+        raise ValueError("[Inference Error] Must provide reference_pca_matrix or enable use_direct_head.")
 
 
 # Aliases for MindSpace-JETA pipeline naming convention

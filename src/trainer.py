@@ -28,17 +28,24 @@ def compute_topk_accuracy(logits: torch.Tensor, k: int = 1) -> float:
     return float(correct / batch_size)
 
 
-class SymmetricCLIPLoss(nn.Module):
-    """Symmetric CLIP / InfoNCE Cross-Entropy Loss over cosine similarity matrices."""
+class HybridCLIPMSELoss(nn.Module):
+    """Joint InfoNCE Cross-Entropy and 5D PCA Coordinate MSE Loss."""
 
     def __init__(self):
         super().__init__()
         self.cross_entropy = nn.CrossEntropyLoss()
+        self.mse_loss = nn.MSELoss()
 
     def forward(
-        self, text_shared: torch.Tensor, pca_shared: torch.Tensor, logit_scale: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
-        """Computes symmetric InfoNCE loss and top-K accuracy metrics across mini-batch."""
+        self,
+        text_shared: torch.Tensor,
+        pca_shared: torch.Tensor,
+        logit_scale: torch.Tensor,
+        predicted_pca: torch.Tensor,
+        target_pca: torch.Tensor,
+        mse_weight: float = 0.5,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
+        """Computes joint InfoNCE + MSE loss and top-K accuracy metrics across mini-batch."""
         device = text_shared.device
         batch_size = text_shared.size(0)
 
@@ -52,7 +59,10 @@ class SymmetricCLIPLoss(nn.Module):
         loss_text = self.cross_entropy(logits_per_text, labels)
         loss_pca = self.cross_entropy(logits_per_pca, labels)
 
-        total_loss = (loss_text + loss_pca) / 2.0
+        clip_loss = (loss_text + loss_pca) / 2.0
+        mse_l = self.mse_loss(predicted_pca, target_pca)
+
+        total_loss = clip_loss + (mse_weight * mse_l)
 
         # Compute accuracy metrics
         top1_text = compute_topk_accuracy(logits_per_text, k=1)
@@ -67,7 +77,11 @@ class SymmetricCLIPLoss(nn.Module):
             "top5_acc_pca": top5_pca,
         }
 
-        return total_loss, loss_text, loss_pca, metrics
+        return total_loss, clip_loss, mse_l, loss_text, metrics
+
+
+# Alias for backward compatibility
+SymmetricCLIPLoss = HybridCLIPMSELoss
 
 
 class Trainer:
@@ -80,7 +94,7 @@ class Trainer:
         self.model.to(self.device)
 
         # Loss function
-        self.criterion = SymmetricCLIPLoss()
+        self.criterion = HybridCLIPMSELoss()
 
         # Optimizer: AdamW
         self.optimizer = torch.optim.AdamW(
@@ -89,7 +103,7 @@ class Trainer:
             weight_decay=self.config.training.weight_decay,
         )
 
-        print(f"[Trainer] Initialized on device: '{self.device}'. Optimizer: AdamW(lr={self.config.training.learning_rate}, weight_decay={self.config.training.weight_decay})")
+        print(f"[Trainer] Initialized on device: '{self.device}'. Optimizer: AdamW(lr={self.config.training.learning_rate}, weight_decay={self.config.training.weight_decay}, mse_weight={self.config.training.mse_weight})")
 
     def train(self, dataset: JournalPCADataset) -> Dict[str, List[Any]]:
         """Executes 80/20 train/val split, runs training epochs, records metrics CSV & plots diagnostic loss curves."""
@@ -119,10 +133,10 @@ class Trainer:
             "epoch": [],
             "train_loss": [],
             "val_loss": [],
-            "train_text_loss": [],
-            "train_pca_loss": [],
-            "val_text_loss": [],
-            "val_pca_loss": [],
+            "train_clip_loss": [],
+            "train_mse_loss": [],
+            "val_clip_loss": [],
+            "val_mse_loss": [],
             "val_top1_acc_text": [],
             "val_top5_acc_text": [],
             "val_top1_acc_pca": [],
@@ -142,30 +156,37 @@ class Trainer:
         for epoch in range(1, epochs + 1):
             # Training phase
             self.model.train()
-            train_losses, train_text_losses, train_pca_losses = [], [], []
+            train_losses, train_clip_losses, train_mse_losses = [], [], []
 
             for text_batch, pca_batch in train_loader:
                 text_batch = text_batch.to(self.device)
                 pca_batch = pca_batch.to(self.device)
 
                 self.optimizer.zero_grad()
-                text_shared, pca_shared, logit_scale = self.model(text_batch, pca_batch)
+                text_shared, pca_shared, logit_scale, predicted_pca = self.model(text_batch, pca_batch)
 
-                loss, loss_t, loss_p, _ = self.criterion(text_shared, pca_shared, logit_scale)
+                loss, clip_l, mse_l, _, _ = self.criterion(
+                    text_shared,
+                    pca_shared,
+                    logit_scale,
+                    predicted_pca,
+                    pca_batch,
+                    mse_weight=self.config.training.mse_weight,
+                )
                 loss.backward()
                 self.optimizer.step()
 
                 train_losses.append(loss.item())
-                train_text_losses.append(loss_t.item())
-                train_pca_losses.append(loss_p.item())
+                train_clip_losses.append(clip_l.item())
+                train_mse_losses.append(mse_l.item())
 
             avg_train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-            avg_train_text = float(np.mean(train_text_losses)) if train_text_losses else 0.0
-            avg_train_pca = float(np.mean(train_pca_losses)) if train_pca_losses else 0.0
+            avg_train_clip = float(np.mean(train_clip_losses)) if train_clip_losses else 0.0
+            avg_train_mse = float(np.mean(train_mse_losses)) if train_mse_losses else 0.0
 
             # Validation phase
             self.model.eval()
-            val_losses, val_text_losses, val_pca_losses = [], [], []
+            val_losses, val_clip_losses, val_mse_losses = [], [], []
             val_t1_txt, val_t5_txt, val_t1_pca, val_t5_pca = [], [], [], []
 
             with torch.no_grad():
@@ -173,12 +194,19 @@ class Trainer:
                     text_batch = text_batch.to(self.device)
                     pca_batch = pca_batch.to(self.device)
 
-                    text_shared, pca_shared, logit_scale = self.model(text_batch, pca_batch)
-                    val_loss, loss_t, loss_p, acc_metrics = self.criterion(text_shared, pca_shared, logit_scale)
+                    text_shared, pca_shared, logit_scale, predicted_pca = self.model(text_batch, pca_batch)
+                    val_loss, clip_l, mse_l, _, acc_metrics = self.criterion(
+                        text_shared,
+                        pca_shared,
+                        logit_scale,
+                        predicted_pca,
+                        pca_batch,
+                        mse_weight=self.config.training.mse_weight,
+                    )
 
                     val_losses.append(val_loss.item())
-                    val_text_losses.append(loss_t.item())
-                    val_pca_losses.append(loss_p.item())
+                    val_clip_losses.append(clip_l.item())
+                    val_mse_losses.append(mse_l.item())
                     val_t1_txt.append(acc_metrics["top1_acc_text"])
                     val_t5_txt.append(acc_metrics["top5_acc_text"])
                     val_t1_pca.append(acc_metrics["top1_acc_pca"])
@@ -194,8 +222,8 @@ class Trainer:
                         val_neg_sims.extend(neg_s.tolist())
 
             avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-            avg_val_text = float(np.mean(val_text_losses)) if val_text_losses else 0.0
-            avg_val_pca = float(np.mean(val_pca_losses)) if val_pca_losses else 0.0
+            avg_val_clip = float(np.mean(val_clip_losses)) if val_clip_losses else 0.0
+            avg_val_mse = float(np.mean(val_mse_losses)) if val_mse_losses else 0.0
             avg_t1_txt = float(np.mean(val_t1_txt)) if val_t1_txt else 0.0
             avg_t5_txt = float(np.mean(val_t5_txt)) if val_t5_txt else 0.0
             avg_t1_pca = float(np.mean(val_t1_pca)) if val_t1_pca else 0.0
@@ -207,10 +235,10 @@ class Trainer:
             history["epoch"].append(epoch)
             history["train_loss"].append(avg_train_loss)
             history["val_loss"].append(avg_val_loss)
-            history["train_text_loss"].append(avg_train_text)
-            history["train_pca_loss"].append(avg_train_pca)
-            history["val_text_loss"].append(avg_val_text)
-            history["val_pca_loss"].append(avg_val_pca)
+            history["train_clip_loss"].append(avg_train_clip)
+            history["train_mse_loss"].append(avg_train_mse)
+            history["val_clip_loss"].append(avg_val_clip)
+            history["val_mse_loss"].append(avg_val_mse)
             history["val_top1_acc_text"].append(avg_t1_txt)
             history["val_top5_acc_text"].append(avg_t5_txt)
             history["val_top1_acc_pca"].append(avg_t1_pca)
@@ -234,7 +262,7 @@ class Trainer:
 
             if epoch % max(1, epochs // 5) == 0 or epoch == epochs:
                 print(
-                    f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Top1 Acc: {avg_t1_txt:.2%} | Gap: {overfitting_gap:+.4f}"
+                    f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_train_loss:.4f} (CLIP: {avg_train_clip:.3f}, MSE: {avg_train_mse:.3f}) | Val Loss: {avg_val_loss:.4f} | Val Top1 Acc: {avg_t1_txt:.2%} | Gap: {overfitting_gap:+.4f}"
                 )
 
         # 1. Export Detailed Training Metrics CSV

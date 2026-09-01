@@ -52,12 +52,14 @@ def objective(
 
     initial_temperature = trial.suggest_float("initial_temperature", 0.01, 0.2, log=True)
     batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
+    mse_weight = trial.suggest_float("mse_weight", 0.05, 2.0, log=True)
 
     # 2. Clone and Update Config for this Trial
     trial_config = copy.deepcopy(base_config)
     trial_config.training.learning_rate = learning_rate
     trial_config.training.weight_decay = weight_decay
     trial_config.training.batch_size = batch_size
+    trial_config.training.mse_weight = mse_weight
     trial_config.model_architecture.shared_dim = shared_dim
     trial_config.model_architecture.text_head_hidden_dims = text_head_hidden_dims
     trial_config.model_architecture.text_head_dropout = text_head_dropout
@@ -202,6 +204,7 @@ def main():
     best_config.training.learning_rate = float(best_trial.params["learning_rate"])
     best_config.training.weight_decay = float(best_trial.params["weight_decay"])
     best_config.training.batch_size = int(best_trial.params["batch_size"])
+    best_config.training.mse_weight = float(best_trial.params["mse_weight"])
     best_config.model_architecture.shared_dim = int(best_trial.params["shared_dim"])
     best_config.model_architecture.text_head_hidden_dims = ast.literal_eval(best_trial.params["text_head_hidden_dims"])
     best_config.model_architecture.text_head_dropout = float(best_trial.params["text_head_dropout"])
