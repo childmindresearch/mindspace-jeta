@@ -27,11 +27,14 @@ from src.trainer import Trainer
 from src.utils import TextEncoderWrapper, load_csv_dataset, generate_synthetic_csv
 
 
+import shutil
+
 def objective(
     trial: optuna.Trial,
     base_config: Config,
     text_embeddings: np.ndarray,
     pca_matrix: np.ndarray,
+    best_tracker: Dict[str, float],
 ) -> float:
     """Optuna objective evaluation function for a single trial."""
     # 1. Suggest Hyperparameters
@@ -65,6 +68,10 @@ def objective(
     trial_epochs = min(15, base_config.training.epochs)
     trial_config.training.epochs = trial_epochs
 
+    # Temporary checkpoint path for evaluating this trial
+    temp_checkpoint_path = os.path.join(base_config.paths.output_dir, "temp_trial_best.pt")
+    trial_config.paths.model_checkpoint = temp_checkpoint_path
+
     # 3. Create Dataset & Model
     dataset = JournalPCADataset(text_embeddings=text_embeddings, pca_scores=pca_matrix)
 
@@ -84,6 +91,19 @@ def objective(
     # 4. Run Training Loop
     history = trainer.train(dataset)
     min_val_loss = float(min(history["val_loss"]))
+
+    # 5. Overwrite global model checkpoint ONLY if this trial improves overall best loss
+    if min_val_loss < best_tracker["loss"]:
+        best_tracker["loss"] = min_val_loss
+        final_checkpoint_path = base_config.paths.model_checkpoint
+        os.makedirs(os.path.dirname(final_checkpoint_path) or ".", exist_ok=True)
+        if os.path.exists(temp_checkpoint_path):
+            shutil.copy2(temp_checkpoint_path, final_checkpoint_path)
+            print(f" [New Global Best] Trial #{trial.number} set a new best val loss ({min_val_loss:.4f}). Saved to '{final_checkpoint_path}'")
+
+    # Clean up temporary checkpoint
+    if os.path.exists(temp_checkpoint_path):
+        os.remove(temp_checkpoint_path)
 
     return min_val_loss
 
@@ -154,8 +174,11 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=base_config.training.seed),
     )
 
+    # Global tracker to ensure contrastive_model.pt always holds the best weights across all trials
+    best_tracker = {"loss": float("inf")}
+
     study.optimize(
-        lambda trial: objective(trial, base_config, text_embeddings, pca_matrix),
+        lambda trial: objective(trial, base_config, text_embeddings, pca_matrix, best_tracker),
         n_trials=n_trials,
         timeout=timeout,
         show_progress_bar=True,
@@ -195,8 +218,9 @@ def main():
     # Save tuned parameters in-place
     save_config(best_config, save_best_path)
 
-    print(f"\n To train a model using these optimal hyperparameters, run:")
-    print(f"   python train.py --config {save_best_path}")
+    print(f"\n [Saved Best Weights] Target checkpoint '{base_config.paths.model_checkpoint}' holds overall best weights (Val Loss: {best_trial.value:.4f})")
+    print(f" To inspect or run inference using these saved optimal weights:")
+    print(f"   python src/inference.py")
     print("=" * 70)
 
 
