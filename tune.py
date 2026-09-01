@@ -11,7 +11,7 @@ import ast
 import copy
 import os
 import sys
-from typing import List
+from typing import List, Dict
 
 # Disable pyarrow_hotfix vulnerability patch conflict with modern pyarrow
 sys.modules['pyarrow_hotfix'] = type('pyarrow_hotfix', (), {'install': lambda *args, **kwargs: None})()
